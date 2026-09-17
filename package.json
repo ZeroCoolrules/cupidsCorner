@@ -1,0 +1,24 @@
+{
+  "name": "cupids-corner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cupid's Corner - dating, messaging, and an AI matchmaker in one app",
+  "engines": {
+    "node": ">=22.9.0"
+  },
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,client -c magenta,cyan \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "npm --workspace server run dev",
+    "dev:client": "npm --workspace client run dev",
+    "build": "npm --workspace client run build",
+    "start": "npm --workspace server run start",
+    "seed": "npm --workspace server run seed"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

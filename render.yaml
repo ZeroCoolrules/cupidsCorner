@@ -1,0 +1,53 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# Deploys Cupid's Corner as a single web service (Express serves both the
+# API and the built React client on one port). Uses Render's free plan by
+# default, which means SQLite data (accounts, matches, messages, uploaded
+# photos) does NOT survive a redeploy or restart — see the "Persistence"
+# section in README.md before treating this as more than a demo deploy.
+
+services:
+  - type: web
+    name: cupids-corner
+    runtime: node
+    plan: free
+    branch: main
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 24
+      # Stream (chat + video) — optional, app runs without it.
+      - key: STREAM_API_KEY
+        sync: false
+      - key: STREAM_API_SECRET
+        sync: false
+      # Stripe (buy sparks) — optional, app runs without it.
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      # Cupid AI — optional, ships with a heuristic fallback.
+      - key: CUPID_LLM_URL
+        sync: false
+      - key: CUPID_LLM_KEY
+        sync: false
+      - key: CUPID_LLM_MODEL
+        sync: false
+
+    # --- Persistence (paid plans only) ---------------------------------
+    # Uncomment below, set `plan` above to `starter` or higher, and add
+    # matching DB_PATH / UPLOADS_DIR env vars to make data survive
+    # restarts and deploys. Without this, every deploy starts from an
+    # empty database and no uploaded photos.
+    #
+    # disk:
+    #   name: cupids-corner-data
+    #   mountPath: /var/data
+    #
+    # then add these env vars too:
+    #   - key: DB_PATH
+    #     value: /var/data/data.sqlite
+    #   - key: UPLOADS_DIR
+    #     value: /var/data/uploads

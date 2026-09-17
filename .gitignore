@@ -1,0 +1,9 @@
+node_modules/
+.env
+.claude/
+server/data.sqlite
+server/data.sqlite-*
+server/uploads/
+client/dist/
+.DS_Store
+*.log
