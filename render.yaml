@@ -35,6 +35,20 @@ services:
         sync: false
       - key: CUPID_LLM_MODEL
         sync: false
+      # x402 paid endpoint (POST /match/compatibility). Disabled until
+      # X402_PAY_TO is set. CDP keys are required for Bazaar listing.
+      - key: X402_PAY_TO
+        sync: false
+      - key: X402_PUBLIC_URL
+        sync: false
+      - key: X402_NETWORK
+        value: eip155:8453
+      - key: X402_PRICE
+        value: "$0.001"
+      - key: CDP_API_KEY_ID
+        sync: false
+      - key: CDP_API_KEY_SECRET
+        sync: false
 
     # --- Persistence (paid plans only) ---------------------------------
     # Uncomment below, set `plan` above to `starter` or higher, and add
