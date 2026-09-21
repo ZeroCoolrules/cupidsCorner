@@ -10,6 +10,7 @@
     "seed": "node --env-file-if-exists=../.env seed.js"
   },
   "dependencies": {
+    "@coinbase/x402": "^2.1.0",
     "@stream-io/node-sdk": "^0.8.6",
     "@x402/core": "^2.26.0",
     "@x402/evm": "^2.26.0",

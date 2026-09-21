@@ -48,6 +48,9 @@ fs.mkdirSync(uploadsDir, { recursive: true });
 initDb();
 
 const app = express();
+// Render terminates TLS in front of us; trust it so req.protocol is "https"
+// (x402 builds the 402 `resource.url` from it).
+app.set("trust proxy", 1);
 app.use(cors());
 
 // Stripe needs the raw, unparsed request body to verify its signature, so
