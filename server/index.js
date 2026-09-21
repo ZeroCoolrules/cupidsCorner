@@ -33,6 +33,8 @@ import {
   createCheckoutSession,
   constructWebhookEvent,
 } from "./billing.js";
+import { parseProfiles, compatibility } from "./compat.js";
+import { COMPAT_ROUTE, isX402Configured, x402Gate } from "./x402.js";
 
 export const REACTION_EMOJIS = ["❤️", "😂", "👍", "😮", "😢"];
 
@@ -1154,6 +1156,24 @@ app.post("/api/billing/checkout", auth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ---------------------------------------------------------------------------
+// paid API (x402): pay-per-call compatibility scoring
+// ---------------------------------------------------------------------------
+
+if (isX402Configured()) {
+  app.use(x402Gate());
+  app.post(COMPAT_ROUTE, async (req, res) => {
+    const parsed = parseProfiles(req.body);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    res.json(await compatibility(parsed.profileA, parsed.profileB));
+  });
+} else {
+  // Never serve this route unpaid.
+  app.post(COMPAT_ROUTE, (req, res) =>
+    res.status(503).json({ error: "Paid endpoint not configured (set X402_PAY_TO)." }),
+  );
+}
 
 // ---------------------------------------------------------------------------
 // static client (production)
