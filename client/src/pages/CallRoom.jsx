@@ -4,6 +4,7 @@ import {
   StreamVideo,
   StreamCall,
   SpeakerLayout,
+  PaginatedGridLayout,
   CallControls,
   CallingState,
   useCallStateHooks,
@@ -18,11 +19,15 @@ export default function CallRoom() {
   const { client, error: clientError, loading: clientLoading } = useStreamVideoClient();
   const [call, setCall] = useState(null);
   const [title, setTitle] = useState("Room");
+  const [isRoom, setIsRoom] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     api(`/conversations/${id}`)
-      .then(({ conversation }) => setTitle(conversation.title))
+      .then(({ conversation }) => {
+        setTitle(conversation.title);
+        setIsRoom(conversation.type === "room");
+      })
       .catch(() => {});
   }, [id]);
 
@@ -87,14 +92,16 @@ export default function CallRoom() {
     <div className="call-view">
       <StreamVideo client={client}>
         <StreamCall call={call}>
-          <RoomUI title={title} onLeave={() => nav(`/chats/${id}`)} />
+          <RoomUI title={title} grid={isRoom} onLeave={() => nav(`/chats/${id}`)} />
         </StreamCall>
       </StreamVideo>
     </div>
   );
 }
 
-function RoomUI({ title, onLeave }) {
+// Public rooms show every cam at once in a grid; DMs and groups keep the
+// speaker layout (one big active speaker, others in a strip).
+function RoomUI({ title, grid, onLeave }) {
   const { useCallCallingState, useParticipantCount } = useCallStateHooks();
   const callingState = useCallCallingState();
   const count = useParticipantCount();
@@ -125,7 +132,7 @@ function RoomUI({ title, onLeave }) {
         </div>
       </header>
       <div className="room-stage">
-        <SpeakerLayout participantsBarPosition="bottom" />
+        {grid ? <PaginatedGridLayout /> : <SpeakerLayout participantsBarPosition="bottom" />}
       </div>
       <div className="room-controls">
         <CallControls />

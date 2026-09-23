@@ -86,11 +86,15 @@ export async function getOrCreateRoomCall(conversationId, members, createdById) 
   );
   const callId = `conv-${conversationId}`;
   const call = c.video.call("default", callId);
-  await call.getOrCreate({
-    data: {
-      created_by_id: String(createdById),
-      members: members.map((m) => ({ user_id: String(m.user_id) })),
-    },
+  const callMembers = members.map((m) => ({ user_id: String(m.user_id) }));
+  const res = await call.getOrCreate({
+    data: { created_by_id: String(createdById), members: callMembers },
   });
+  // getOrCreate ignores `data` when the call already exists, so anyone who
+  // joined the conversation after the call was first created has to be
+  // added explicitly. update_members is an upsert, so resending is harmless.
+  if (!res.created) {
+    await call.updateCallMembers({ update_members: callMembers });
+  }
   return { callType: "default", callId };
 }

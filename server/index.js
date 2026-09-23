@@ -1081,9 +1081,11 @@ app.post("/api/rooms/:id/join", auth, async (req, res) => {
 
   if (!q.isMember.get(id, req.userId)) {
     q.insertMember.run(id, req.userId);
+    const members = q.membersOf.all(id);
     await safeStream(() =>
-      addChannelMember(id, q.membersOf.all(id).find((m) => m.user_id === req.userId))
+      addChannelMember(id, members.find((m) => m.user_id === req.userId))
     );
+    await safeStream(() => getOrCreateRoomCall(id, members, conv.created_by ?? req.userId));
     await announce(id, `${publicUser(req.userId).displayName} joined the room.`);
   }
   res.json({
