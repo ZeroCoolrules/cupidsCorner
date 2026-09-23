@@ -219,6 +219,9 @@ export default function Chat() {
     try {
       if (useStream) {
         const res = await channelRef.current.sendMessage({ text: body });
+        // Frozen channels (a block is in place) answer with an unsaved
+        // `error`-type message instead of rejecting.
+        if (res.message.type === "error") throw new Error("This chat is unavailable.");
         appendUnique([fromStreamMessage(res.message, user.id)]);
       } else {
         await api(`/conversations/${id}/messages`, { method: "POST", body: { body } });

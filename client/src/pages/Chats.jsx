@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api.js";
+import { useStreamChatClient } from "../streamChat.js";
 import Avatar from "../components/Avatar.jsx";
 
 function preview(c) {
@@ -9,11 +10,68 @@ function preview(c) {
   return b.length > 48 ? b.slice(0, 47) + "…" : b;
 }
 
+// When Stream Chat is on, real messages only live in Stream, so the server's
+// lastMessage (local table) is stale. Summarise each watched channel into
+// { [conversationId]: { lastMessage, unread } } to overlay on the list.
+function summarizeChannels(client) {
+  const out = {};
+  for (const ch of Object.values(client.activeChannels)) {
+    if (!ch.id?.startsWith("conv-")) continue;
+    const m = ch.lastMessage();
+    if (m?.type === "error") continue;
+    out[ch.id.slice(5)] = {
+      unread: ch.countUnread(),
+      lastMessage: m
+        ? {
+            body: m.messageKind === "gift" ? `${m.user?.name || "Someone"} ${m.text}` : m.text || "",
+            createdAt: m.created_at,
+          }
+        : null,
+    };
+  }
+  return out;
+}
+
+const LIVE_EVENTS = new Set(["message.new", "message.read", "notification.mark_read"]);
+const REQUERY_EVENTS = new Set(["notification.message_new", "notification.added_to_channel"]);
+
+function useStreamChannelSummaries() {
+  const { client } = useStreamChatClient();
+  const [summaries, setSummaries] = useState({});
+
+  useEffect(() => {
+    if (!client) return;
+    let alive = true;
+    const query = () =>
+      client
+        .queryChannels(
+          { type: "messaging", members: { $in: [client.userID] } },
+          [{ last_message_at: -1 }],
+          { limit: 30, watch: true, state: true }
+        )
+        .then(() => alive && setSummaries(summarizeChannels(client)))
+        .catch(() => {});
+    query();
+    const sub = client.on((event) => {
+      if (!alive) return;
+      if (REQUERY_EVENTS.has(event.type)) query();
+      else if (LIVE_EVENTS.has(event.type)) setSummaries(summarizeChannels(client));
+    });
+    return () => {
+      alive = false;
+      sub.unsubscribe();
+    };
+  }, [client]);
+
+  return summaries;
+}
+
 export default function Chats() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
   const nav = useNavigate();
+  const summaries = useStreamChannelSummaries();
 
   async function load() {
     const { conversations } = await api("/conversations");
@@ -24,6 +82,16 @@ export default function Chats() {
   useEffect(() => {
     load();
   }, []);
+
+  // Cupid stays pinned on top; everything else by most recent message.
+  const rows = useMemo(() => {
+    const merged = items.map((c) => {
+      const s = c.type !== "ai" && summaries[String(c.id)];
+      return s ? { ...c, lastMessage: s.lastMessage || c.lastMessage, unread: s.unread } : c;
+    });
+    const at = (c) => (c.lastMessage?.createdAt ? new Date(c.lastMessage.createdAt).getTime() : 0);
+    return merged.sort((a, b) => (a.type === "ai" ? -1 : b.type === "ai" ? 1 : at(b) - at(a)));
+  }, [items, summaries]);
 
   return (
     <div className="page">
@@ -38,7 +106,7 @@ export default function Chats() {
         <p className="muted pad">Loading…</p>
       ) : (
         <ul className="chat-list">
-          {items.map((c) => (
+          {rows.map((c) => (
             <li key={c.id}>
               <button className="chat-row" onClick={() => nav(`/chats/${c.id}`)}>
                 <Avatar user={{ photoUrl: c.photoUrl, avatarEmoji: c.emoji, avatarColor: c.color }} premium={c.isPremium} />
@@ -51,8 +119,9 @@ export default function Chats() {
                     )}
                     {c.type === "room" && <span className="badge">Room</span>}
                   </div>
-                  <div className="chat-preview muted">{preview(c)}</div>
+                  <div className={"chat-preview" + (c.unread ? " unread" : " muted")}>{preview(c)}</div>
                 </div>
+                {c.unread > 0 && <span className="unread-count">{c.unread > 99 ? "99+" : c.unread}</span>}
               </button>
             </li>
           ))}

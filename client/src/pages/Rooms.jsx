@@ -21,8 +21,11 @@ export default function Rooms() {
     setLoading(false);
   }
 
+  // Poll so "who's live" stays fresh while the list is open.
   useEffect(() => {
     load();
+    const t = setInterval(() => load().catch(() => {}), 15000);
+    return () => clearInterval(t);
   }, []);
 
   async function join(room) {
@@ -31,6 +34,8 @@ export default function Rooms() {
     try {
       await api(`/rooms/${room.id}/join`, { method: "POST" });
       nav(`/chats/${room.id}`);
+    } catch (err) {
+      alert(err.message);
     } finally {
       setJoiningId(null);
     }
@@ -80,6 +85,24 @@ export default function Rooms() {
                   {r.boosted && <span className="badge">🚀 Boosted</span>}
                 </div>
                 {r.topic && <div className="muted sm">{r.topic}</div>}
+                {r.live && (
+                  <div className="live-row">
+                    <span className="live-chip">🔴 {r.live.count} live</span>
+                    <span className="live-faces">
+                      {r.live.users.slice(0, 4).map((u) => (
+                        <span
+                          key={u.id}
+                          className="avatar xs"
+                          style={{ background: u.color || "#bbb" }}
+                          title={u.name}
+                        >
+                          {u.emoji || "🙂"}
+                        </span>
+                      ))}
+                      {r.live.count > 4 && <span className="muted sm">+{r.live.count - 4}</span>}
+                    </span>
+                  </div>
+                )}
                 <div className="muted sm">
                   {r.memberCount} {r.memberCount === 1 ? "person" : "people"}
                   {r.createdBy ? ` · hosted by ${r.createdBy.displayName}` : ""}
@@ -89,6 +112,11 @@ export default function Rooms() {
                 <button className="room-join" onClick={() => join(r)} disabled={joiningId === r.id}>
                   {r.amIMember ? "Open" : joiningId === r.id ? "…" : "Join"}
                 </button>
+                {r.live && r.amIMember && (
+                  <button className="ghost sm-btn" onClick={() => nav(`/chats/${r.id}/call`)}>
+                    🎥 Jump in
+                  </button>
+                )}
                 {r.createdBy?.id === user.id && !r.boosted && (
                   <button className="ghost sm-btn" onClick={() => boost(r)} disabled={boostingId === r.id}>
                     🚀 Boost

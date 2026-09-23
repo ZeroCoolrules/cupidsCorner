@@ -502,6 +502,20 @@ code {
   text-overflow: ellipsis;
   font-size: 13px;
 }
+.chat-preview.unread { font-weight: 700; }
+.unread-count {
+  flex: none;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
 .badge {
   background: var(--accent);
   color: #fff;
@@ -830,6 +844,59 @@ code {
   flex-shrink: 0;
 }
 .sm-btn { font-size: 11px; padding: 5px 10px; }
+
+/* ---------- live rooms + host controls ---------- */
+.live-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.live-chip {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  background: #ffe3e9;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.live-faces { display: flex; align-items: center; gap: 2px; }
+.host-btn { margin-left: auto; color: #fff; border-color: rgba(255, 255, 255, 0.3); }
+.host-panel {
+  background: rgba(40, 20, 28, 0.96);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 10px 14px;
+  max-height: 40%;
+  overflow-y: auto;
+}
+.host-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.host-panel-head .sm-btn { color: #fff; }
+.host-list { list-style: none; margin: 0; padding: 0; }
+.host-list li {
+  flex-wrap: wrap;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.host-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.host-actions button {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 5px 7px;
+  font-size: 14px;
+}
+.host-actions button:disabled { opacity: 0.35; }
+.host-actions button.on { background: #f4a259; }
+.host-actions button.danger { background: rgba(255, 77, 109, 0.35); }
 
 /* ---------- ratings / fans ---------- */
 .stat-row {

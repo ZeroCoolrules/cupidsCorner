@@ -8,13 +8,20 @@ import multer from "multer";
 import { fileURLToPath } from "node:url";
 import { db, initDb, pair } from "./db.js";
 import { cupidReply, CUPID_WELCOME } from "./cupid.js";
-import { isStreamConfigured, streamCredentialsFor, getOrCreateRoomCall } from "./stream.js";
+import {
+  isStreamConfigured,
+  streamCredentialsFor,
+  getOrCreateRoomCall,
+  liveRoomStatus,
+  moderateRoomCall,
+} from "./stream.js";
 import {
   syncChannel,
   addChannelMember,
   removeChannelMember,
   sendSystemMessage,
   sendGiftMessage,
+  setChannelFrozen,
 } from "./streamChat.js";
 import { GIFT_CATALOG, GIFT_BY_KEY } from "./gifts.js";
 import {
@@ -173,6 +180,10 @@ const q = {
   `),
   insertMember: db.prepare(
     "INSERT INTO conversation_members (conversation_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING"
+  ),
+  isRoomBanned: db.prepare("SELECT 1 FROM room_bans WHERE conversation_id = ? AND user_id = ?"),
+  addRoomBan: db.prepare(
+    "INSERT INTO room_bans (conversation_id, user_id, banned_by) VALUES (?, ?, ?) ON CONFLICT DO NOTHING"
   ),
   removeMember: db.prepare(
     "DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ?"
@@ -537,16 +548,26 @@ app.get("/api/users/:id", auth, (req, res) => {
   });
 });
 
-app.post("/api/users/:id/block", auth, (req, res) => {
+// Blocking shuts the DM for both people: our routes refuse it (isBlockedDm)
+// and the Stream channel is frozen so nobody can post into it directly.
+app.post("/api/users/:id/block", auth, async (req, res) => {
   const id = Number(req.params.id);
   if (id === req.userId) return res.status(400).json({ error: "can't block yourself" });
   if (!q.userById.get(id)) return res.status(404).json({ error: "no such user" });
   q.addBlock.run(req.userId, id);
+  const dm = q.dmBetween.get(req.userId, id);
+  if (dm) await safeStream(() => setChannelFrozen(dm.id, true));
   res.json({ ok: true, blocked: true });
 });
 
-app.delete("/api/users/:id/block", auth, (req, res) => {
-  q.removeBlock.run(req.userId, Number(req.params.id));
+app.delete("/api/users/:id/block", auth, async (req, res) => {
+  const id = Number(req.params.id);
+  q.removeBlock.run(req.userId, id);
+  // Stay frozen if the other person is still blocking this user.
+  const dm = q.dmBetween.get(req.userId, id);
+  if (dm && !q.isBlocked.get(req.userId, id, id, req.userId)) {
+    await safeStream(() => setChannelFrozen(dm.id, false));
+  }
   res.json({ ok: true, blocked: false });
 });
 
@@ -789,6 +810,14 @@ app.get("/api/matches", auth, (req, res) => {
 // conversations + messaging
 // ---------------------------------------------------------------------------
 
+// True when `conversationId` is a DM and either side has blocked the other.
+function isBlockedDm(conversationId, meId) {
+  const conv = q.convById.get(conversationId);
+  if (conv?.type !== "dm") return false;
+  const other = q.membersOf.all(conversationId).find((m) => m.user_id !== meId);
+  return !!other && !!q.isBlocked.get(meId, other.user_id, other.user_id, meId);
+}
+
 function conversationView(conv, meId) {
   const members = q.membersOf.all(conv.id);
   const last = q.lastMessage.get(conv.id);
@@ -823,6 +852,7 @@ function conversationView(conv, meId) {
     photoUrl,
     isPremium,
     isPublic: !!conv.is_public,
+    createdById: conv.created_by ?? null,
     members: members.map((m) => ({
       id: m.user_id,
       displayName: m.display_name,
@@ -859,6 +889,7 @@ app.get("/api/conversations/:id", auth, (req, res) => {
   const id = Number(req.params.id);
   const conv = q.convById.get(id);
   if (!conv || !q.isMember.get(id, req.userId)) return res.status(403).json({ error: "not a member" });
+  if (isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
   res.json({ conversation: conversationView(conv, req.userId) });
 });
 
@@ -919,6 +950,7 @@ app.post("/api/conversations/:id/leave", auth, async (req, res) => {
 app.get("/api/conversations/:id/messages", auth, (req, res) => {
   const id = Number(req.params.id);
   if (!q.isMember.get(id, req.userId)) return res.status(403).json({ error: "not a member" });
+  if (isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
   const after = Number(req.query.after || 0);
 
   const reactionRows = q.reactionsByConv.all(id);
@@ -962,6 +994,7 @@ app.get("/api/conversations/:id/messages", auth, (req, res) => {
 app.post("/api/conversations/:id/typing", auth, (req, res) => {
   const id = Number(req.params.id);
   if (!q.isMember.get(id, req.userId)) return res.status(403).json({ error: "not a member" });
+  if (isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
   markTyping(id, req.userId);
   res.json({ ok: true });
 });
@@ -970,6 +1003,7 @@ app.post("/api/conversations/:id/messages/:messageId/react", auth, (req, res) =>
   const id = Number(req.params.id);
   const messageId = Number(req.params.messageId);
   if (!q.isMember.get(id, req.userId)) return res.status(403).json({ error: "not a member" });
+  if (isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
   const emoji = String(req.body?.emoji || "");
   if (!REACTION_EMOJIS.includes(emoji)) return res.status(400).json({ error: "unknown reaction" });
 
@@ -997,6 +1031,7 @@ app.post("/api/conversations/:id/messages", auth, async (req, res) => {
   const conv = q.convById.get(id);
   if (!conv || !q.isMember.get(id, req.userId))
     return res.status(403).json({ error: "not a member" });
+  if (isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
   const body = String(req.body?.body || "").trim();
   if (!body) return res.status(400).json({ error: "empty message" });
   if (body.length > 4000) return res.status(400).json({ error: "message too long" });
@@ -1026,14 +1061,27 @@ app.post("/api/conversations/:id/messages", auth, async (req, res) => {
 // public rooms — Cyber Friends–style, browsable, no match required to join
 // ---------------------------------------------------------------------------
 
-app.get("/api/rooms", auth, (req, res) => {
-  const rows = q.publicRoomsRanked.all().map((c) => ({
+app.get("/api/rooms", auth, async (req, res) => {
+  const convs = q.publicRoomsRanked.all();
+  let live = {};
+  if (isStreamConfigured()) {
+    try {
+      live = await liveRoomStatus(convs.map((c) => c.id));
+    } catch (err) {
+      console.warn("[stream] live room status failed:", err.message);
+    }
+  }
+  const rows = convs.map((c) => ({
     ...conversationView(c, req.userId),
     memberCount: q.memberCount.get(c.id).c,
     amIMember: !!q.isMember.get(c.id, req.userId),
     createdBy: c.created_by ? publicUser(c.created_by) : null,
     boosted: !!c.is_boosted,
+    live: live[String(c.id)] || null,
   }));
+  // Boosted rooms stay on top; within each group, rooms with people on cam
+  // come first. Array.sort is stable, so the query's order is kept otherwise.
+  rows.sort((a, b) => b.boosted - a.boosted || !!b.live - !!a.live);
   res.json({ rooms: rows });
 });
 
@@ -1078,6 +1126,9 @@ app.post("/api/rooms/:id/join", auth, async (req, res) => {
   const id = Number(req.params.id);
   const conv = q.convById.get(id);
   if (!conv || conv.type !== "room") return res.status(404).json({ error: "no such room" });
+  if (q.isRoomBanned.get(id, req.userId)) {
+    return res.status(403).json({ error: "The host has removed you from this room." });
+  }
 
   if (!q.isMember.get(id, req.userId)) {
     q.insertMember.run(id, req.userId);
@@ -1095,6 +1146,45 @@ app.post("/api/rooms/:id/join", auth, async (req, res) => {
       amIMember: true,
     },
   });
+});
+
+// Host controls for a room's webcam call. Only the room's creator can use
+// them, and never on themselves. "ban" also drops the person from the room
+// and stops them rejoining it (room_bans) or its call (Stream call block).
+const ROOM_MOD_ACTIONS = new Set(["mute", "camOff", "spotlight", "unspotlight", "remove", "ban"]);
+
+app.post("/api/rooms/:id/moderate", auth, async (req, res) => {
+  const id = Number(req.params.id);
+  const conv = q.convById.get(id);
+  if (!conv || conv.type !== "room") return res.status(404).json({ error: "no such room" });
+  if (conv.created_by !== req.userId) return res.status(403).json({ error: "only the host can do that" });
+  const action = String(req.body?.action || "");
+  if (!ROOM_MOD_ACTIONS.has(action)) return res.status(400).json({ error: "unknown action" });
+  const targetId = Number(req.body?.userId);
+  if (!targetId || targetId === req.userId) return res.status(400).json({ error: "pick someone else" });
+  const sessionId = String(req.body?.sessionId || "");
+  if ((action === "spotlight" || action === "unspotlight") && !sessionId) {
+    return res.status(400).json({ error: "sessionId required" });
+  }
+  if (!isStreamConfigured()) return res.status(503).json({ error: "Video isn't configured." });
+
+  try {
+    await moderateRoomCall(id, action, { targetId, sessionId, hostId: req.userId });
+  } catch (err) {
+    // Kicking someone who already left isn't worth failing a ban over.
+    if (action !== "ban") return res.status(502).json({ error: err.message });
+  }
+
+  if (action === "ban") {
+    const target = publicUser(targetId);
+    q.addRoomBan.run(id, targetId, req.userId);
+    if (q.isMember.get(id, targetId)) {
+      q.removeMember.run(id, targetId);
+      await safeStream(() => removeChannelMember(id, targetId));
+      if (target) await announce(id, `${target.displayName} was removed by the host.`);
+    }
+  }
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -1124,6 +1214,7 @@ app.post("/api/conversations/:id/call", auth, async (req, res) => {
   if (!conv || !q.isMember.get(id, req.userId)) {
     return res.status(403).json({ error: "not a member" });
   }
+  if (isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
   if (conv.type === "ai") {
     return res.status(400).json({ error: "Cupid doesn't do video calls (yet)" });
   }
@@ -1203,6 +1294,28 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: "Something went wrong." });
 });
 
+// Conversations created while Stream wasn't configured (e.g. seed data)
+// have no Stream channel, or an empty one, so members can't read them.
+// Reconcile every non-AI conversation once at startup; idempotent.
+async function backfillStreamChannels() {
+  const convs = db.prepare("SELECT * FROM conversations WHERE type != 'ai'").all();
+  for (const conv of convs) {
+    const members = q.membersOf.all(conv.id);
+    if (!members.length) continue;
+    await safeStream(() =>
+      syncChannel({
+        conversationId: conv.id,
+        type: conv.type,
+        title: conv.title,
+        members,
+        createdById: conv.created_by ?? members[0].user_id,
+      })
+    );
+  }
+  console.log(`[stream] synced ${convs.length} conversation channel(s)`);
+}
+
 app.listen(PORT, () => {
   console.log(`Cupid's Corner API on http://localhost:${PORT}`);
+  if (isStreamConfigured()) backfillStreamChannels();
 });

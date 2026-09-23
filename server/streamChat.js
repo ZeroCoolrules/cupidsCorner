@@ -61,6 +61,10 @@ export async function syncChannel({ conversationId, type, title, members, create
     conversation_type: type,
   });
   await channel.create();
+  // create() leaves an existing channel's members untouched (e.g. one made
+  // empty by an earlier server-side message), so add them explicitly.
+  // addMembers is a no-op for people who are already in.
+  await channel.addMembers(members.map((m) => String(m.user_id)));
 }
 
 export async function addChannelMember(conversationId, member) {
@@ -83,6 +87,15 @@ export async function removeChannelMember(conversationId, userId) {
   if (!c) return;
   const channel = c.channel("messaging", channelIdFor(conversationId));
   await channel.removeMembers([String(userId)]);
+}
+
+// Frozen channels reject new messages and reactions from everyone — used to
+// shut a DM when either person blocks the other.
+export async function setChannelFrozen(conversationId, frozen) {
+  const c = getClient();
+  if (!c) return;
+  const channel = c.channel("messaging", channelIdFor(conversationId));
+  await channel.updatePartial({ set: { frozen } });
 }
 
 export async function sendSystemMessage(conversationId, text) {

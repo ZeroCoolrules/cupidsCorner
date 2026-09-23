@@ -149,6 +149,15 @@ export function initDb() {
       PRIMARY KEY (conversation_id, user_id)
     );
 
+    -- People a room's host has banned: they can't rejoin the room or its call.
+    CREATE TABLE IF NOT EXISTS room_bans (
+      conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      banned_by       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (conversation_id, user_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, id);
     CREATE INDEX IF NOT EXISTS idx_members_user ON conversation_members(user_id);
     CREATE INDEX IF NOT EXISTS idx_fans_target ON fans(target_id);
