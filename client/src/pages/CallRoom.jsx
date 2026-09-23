@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import {
   StreamVideo,
   StreamCall,
+  StreamTheme,
   SpeakerLayout,
   PaginatedGridLayout,
   CallControls,
@@ -99,12 +100,16 @@ export default function CallRoom() {
     <div className="call-view">
       <StreamVideo client={client}>
         <StreamCall call={call}>
-          <RoomUI
-            title={title}
-            grid={isRoom}
-            hostRoomId={isHost ? id : null}
-            onLeave={() => nav(`/chats/${id}`)}
-          />
+          {/* Stream's component styles are scoped under .str-video, which
+              StreamTheme provides — without it CallControls render unstyled. */}
+          <StreamTheme className="call-theme">
+            <RoomUI
+              title={title}
+              grid={isRoom}
+              hostRoomId={isHost ? id : null}
+              onLeave={() => nav(`/chats/${id}`)}
+            />
+          </StreamTheme>
         </StreamCall>
       </StreamVideo>
     </div>

@@ -567,15 +567,21 @@ code {
   inset: 0;
   display: flex;
   flex-direction: column;
-  background: #14090d;
+  background: linear-gradient(165deg, #4a1433 0%, #2a0c22 55%, #1a0716 100%);
   color: #fff;
 }
 .call-view .chat-header {
-  background: rgba(20, 9, 13, 0.9);
+  background: rgba(74, 20, 51, 0.6);
   border-bottom-color: rgba(255, 255, 255, 0.1);
 }
 .call-view .chat-title { color: #fff; }
 .call-view .back { color: #fff; }
+.call-theme {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 .room-stage {
   flex: 1;
   min-height: 0;
