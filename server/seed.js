@@ -8,16 +8,16 @@ initDb();
 const DEMO_PASSWORD = "password123";
 
 const people = [
-  { u: "ava",    n: "Ava",    age: 28, g: "woman",     o: "straight", city: "Brooklyn",   e: "🌻", c: "#ff6b8a", bio: "Ceramics, cold brew, and long arguments about movies I haven't finished.", i: ["pottery", "film", "hiking"] },
+  { u: "ava",    n: "Ava",    age: 28, g: "woman",     o: "straight", city: "Brooklyn",   e: "🌻", c: "#7cc8ff", bio: "Ceramics, cold brew, and long arguments about movies I haven't finished.", i: ["pottery", "film", "hiking"] },
   { u: "leo",    n: "Leo",    age: 31, g: "man",       o: "bi",       city: "Oakland",    e: "🎸", c: "#5b8def", bio: "Plays in a band nobody's heard of. Will cook you breakfast.", i: ["music", "cooking", "vinyl"] },
   { u: "mira",   n: "Mira",   age: 26, g: "woman",     o: "queer",    city: "Austin",     e: "🌵", c: "#3ec6a0", bio: "Trail runner, taco scientist, aggressively good at trivia.", i: ["running", "tacos", "trivia"] },
   { u: "sam",    n: "Sam",    age: 34, g: "nonbinary", o: "pan",      city: "Chicago",    e: "📚", c: "#f4a259", bio: "Bookstore haunt. I will lend you a novel and expect a full report.", i: ["reading", "coffee", "cats"] },
   { u: "noah",   n: "Noah",   age: 29, g: "man",       o: "straight", city: "Denver",     e: "🏔️", c: "#7d5fff", bio: "Climbs rocks, bakes sourdough, terrible at texting first.", i: ["climbing", "baking", "dogs"] },
-  { u: "priya",  n: "Priya",  age: 27, g: "woman",     o: "straight", city: "Seattle",    e: "🌧️", c: "#ef476f", bio: "Rain enthusiast. Museum dates or bust.", i: ["art", "museums", "kayaking"] },
+  { u: "priya",  n: "Priya",  age: 27, g: "woman",     o: "straight", city: "Seattle",    e: "🌧️", c: "#4dd0e1", bio: "Rain enthusiast. Museum dates or bust.", i: ["art", "museums", "kayaking"] },
   { u: "diego",  n: "Diego",  age: 33, g: "man",       o: "gay",      city: "Miami",      e: "🌊", c: "#06d6a0", bio: "Salsa on Fridays, beach cleanups on Sundays. Bring sunscreen.", i: ["dancing", "surfing", "volunteering"] },
   { u: "yuki",   n: "Yuki",   age: 30, g: "woman",     o: "bi",       city: "Portland",   e: "🍜", c: "#ffd166", bio: "Ramen cartographer. Ask me for the good spots.", i: ["food", "cycling", "photography"] },
   { u: "theo",   n: "Theo",   age: 25, g: "man",       o: "straight", city: "Nashville",  e: "🎺", c: "#118ab2", bio: "Jazz trumpet, bad puns, good dog.", i: ["jazz", "puns", "camping"] },
-  { u: "cleo",   n: "Cleo",   age: 32, g: "woman",     o: "queer",    city: "Los Angeles",e: "🪩", c: "#e56b6f", bio: "Costume designer. I have opinions about your Halloween plans.", i: ["design", "thrifting", "roller skating"] },
+  { u: "cleo",   n: "Cleo",   age: 32, g: "woman",     o: "queer",    city: "Los Angeles",e: "🪩", c: "#90caf9", bio: "Costume designer. I have opinions about your Halloween plans.", i: ["design", "thrifting", "roller skating"] },
 ];
 
 const findUser = db.prepare("SELECT * FROM users WHERE username = ?");
@@ -115,7 +115,7 @@ if (!groupExists) {
 
 // public webcam rooms — anyone can browse + join, no match required
 const rooms = [
-  { title: "Friday Night Lounge", topic: "Hang out, watch cams, say hi.", emoji: "🍸", color: "#ff6b8a", host: "ava", members: ["ava", "leo", "priya"] },
+  { title: "Friday Night Lounge", topic: "Hang out, watch cams, say hi.", emoji: "🍸", color: "#7cc8ff", host: "ava", members: ["ava", "leo", "priya"] },
   { title: "Trivia Night", topic: "Weekly trivia — obscure categories only.", emoji: "🧠", color: "#3ec6a0", host: "mira", members: ["mira", "noah", "theo", "sam"] },
   { title: "Late Night Talk", topic: "Whoever's up, come chat.", emoji: "🌙", color: "#7d5fff", host: "diego", members: ["diego", "yuki", "cleo"] },
 ];

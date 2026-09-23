@@ -386,7 +386,7 @@ export default function Chat() {
         })}
         {isAI && sending && (
           <div className="msg-line">
-            <span className="avatar xs" style={{ background: "#ff4d6d" }}>
+            <span className="avatar xs" style={{ background: "#3aa0e8" }}>
               💘
             </span>
             <div className="bubble ai typing">

@@ -28,7 +28,7 @@ export function initDb() {
       bio          TEXT DEFAULT '',
       city         TEXT DEFAULT '',
       avatar_emoji TEXT DEFAULT '💘',
-      avatar_color TEXT DEFAULT '#ff6b8a',
+      avatar_color TEXT DEFAULT '#7cc8ff',
       interests    TEXT DEFAULT '[]',
       sparks       INTEGER NOT NULL DEFAULT 500,
       updated_at   TEXT NOT NULL DEFAULT (datetime('now'))

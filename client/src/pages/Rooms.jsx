@@ -4,7 +4,7 @@ import { api } from "../api.js";
 import { useAuth } from "../auth.jsx";
 
 const EMOJIS = ["🌐", "🍸", "🧠", "🌙", "🎮", "🎤", "🔥", "☕"];
-const COLORS = ["#7d5fff", "#ff6b8a", "#3ec6a0", "#f4a259", "#ef476f", "#06d6a0"];
+const COLORS = ["#7d5fff", "#7cc8ff", "#3ec6a0", "#f4a259", "#4dd0e1", "#06d6a0"];
 
 export default function Rooms() {
   const [rooms, setRooms] = useState([]);

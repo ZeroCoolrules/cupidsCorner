@@ -5,7 +5,7 @@ import { api, apiUpload } from "../api.js";
 import Avatar from "../components/Avatar.jsx";
 
 const EMOJIS = ["💘", "🌻", "🎸", "🌵", "📚", "🏔️", "🌊", "🍜", "🎺", "🪩", "🔥", "✨"];
-const COLORS = ["#ff6b8a", "#5b8def", "#3ec6a0", "#f4a259", "#7d5fff", "#ef476f", "#06d6a0", "#ffd166"];
+const COLORS = ["#7cc8ff", "#5b8def", "#3ec6a0", "#f4a259", "#7d5fff", "#4dd0e1", "#06d6a0", "#ffd166"];
 
 function isPremiumActive(user) {
   return !!user.premiumUntil && new Date(user.premiumUntil.replace(" ", "T") + "Z") > new Date();
@@ -21,7 +21,7 @@ export default function Profile() {
     city: user.city || "",
     bio: user.bio || "",
     avatarEmoji: user.avatarEmoji || "💘",
-    avatarColor: user.avatarColor || "#ff6b8a",
+    avatarColor: user.avatarColor || "#7cc8ff",
     interests: (user.interests || []).join(", "),
   });
   const [prompts, setPrompts] = useState(

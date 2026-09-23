@@ -409,7 +409,7 @@ app.post("/api/auth/signup", (req, res) => {
     bio = "",
     city = "",
     avatarEmoji = "💘",
-    avatarColor = "#ff6b8a",
+    avatarColor = "#7cc8ff",
     interests = [],
   } = req.body || {};
 
@@ -836,7 +836,7 @@ function conversationView(conv, meId) {
   } else if (conv.type === "ai") {
     title = "Cupid";
     emoji = "💘";
-    color = "#ff4d6d";
+    color = "#3aa0e8";
   } else if (conv.type === "group") {
     title = conv.title || "Group chat";
   } else if (conv.type === "room") {
@@ -971,7 +971,7 @@ app.get("/api/conversations/:id/messages", auth, (req, res) => {
     senderId: m.sender_id,
     senderName: m.kind === "ai" ? "Cupid" : m.sender_name,
     senderEmoji: m.kind === "ai" ? "💘" : m.sender_emoji,
-    senderColor: m.kind === "ai" ? "#ff4d6d" : m.sender_color,
+    senderColor: m.kind === "ai" ? "#3aa0e8" : m.sender_color,
     kind: m.kind,
     body: m.body,
     gift: m.gift_key ? GIFT_BY_KEY[m.gift_key] || null : null,

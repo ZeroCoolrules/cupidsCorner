@@ -6,17 +6,49 @@ import {
   StreamTheme,
   SpeakerLayout,
   PaginatedGridLayout,
-  CallControls,
   CallingState,
   useCallStateHooks,
   useCall,
   hasAudio,
   hasVideo,
+  Restricted,
+  OwnCapability,
+  SpeakingWhileMutedNotification,
+  ToggleAudioPublishingButton,
+  ToggleVideoPublishingButton,
+  ReactionsButton,
+  ScreenShareButton,
+  CancelCallButton,
 } from "@stream-io/video-react-sdk";
 import "@stream-io/video-react-sdk/dist/css/styles.css";
 import { useStreamVideoClient } from "../stream.js";
 import { api } from "../api.js";
 import { useAuth } from "../auth.jsx";
+import MatrixRain from "../components/MatrixRain.jsx";
+
+// Stream's default CallControls minus the record button — nobody should be
+// able to record other people's cams on a dating app.
+function RoomControls() {
+  return (
+    <div className="str-video__call-controls">
+      <Restricted requiredGrants={[OwnCapability.SEND_AUDIO]}>
+        <SpeakingWhileMutedNotification>
+          <ToggleAudioPublishingButton />
+        </SpeakingWhileMutedNotification>
+      </Restricted>
+      <Restricted requiredGrants={[OwnCapability.SEND_VIDEO]}>
+        <ToggleVideoPublishingButton />
+      </Restricted>
+      <Restricted requiredGrants={[OwnCapability.CREATE_REACTION]}>
+        <ReactionsButton />
+      </Restricted>
+      <Restricted requiredGrants={[OwnCapability.SCREENSHARE]}>
+        <ScreenShareButton />
+      </Restricted>
+      <CancelCallButton />
+    </div>
+  );
+}
 
 export default function CallRoom() {
   const { id } = useParams();
@@ -70,6 +102,7 @@ export default function CallRoom() {
   if (clientError || error) {
     return (
       <div className="call-view">
+        <MatrixRain />
         <header className="chat-header">
           <button className="back" onClick={() => nav(`/chats/${id}`)}>
             ‹
@@ -89,6 +122,7 @@ export default function CallRoom() {
   if (clientLoading || !call) {
     return (
       <div className="call-view">
+        <MatrixRain />
         <div className="screen center">
           <div className="pulse">🎥</div>
         </div>
@@ -98,6 +132,7 @@ export default function CallRoom() {
 
   return (
     <div className="call-view">
+      <MatrixRain />
       <StreamVideo client={client}>
         <StreamCall call={call}>
           {/* Stream's component styles are scoped under .str-video, which
@@ -171,7 +206,7 @@ function RoomUI({ title, grid, hostRoomId, onLeave }) {
       </div>
       {hostRoomId && showPeople && <HostPanel roomId={hostRoomId} onClose={() => setShowPeople(false)} />}
       <div className="room-controls">
-        <CallControls />
+        <RoomControls />
       </div>
     </>
   );

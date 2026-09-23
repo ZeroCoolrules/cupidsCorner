@@ -11,7 +11,7 @@ const FEATURES = [
 ];
 
 const EMOJIS = ["💘", "🌻", "🎸", "🌵", "📚", "🏔️", "🌊", "🍜", "🎺", "🪩", "🔥", "✨"];
-const COLORS = ["#ff6b8a", "#5b8def", "#3ec6a0", "#f4a259", "#7d5fff", "#ef476f", "#06d6a0", "#ffd166"];
+const COLORS = ["#7cc8ff", "#5b8def", "#3ec6a0", "#f4a259", "#7d5fff", "#4dd0e1", "#06d6a0", "#ffd166"];
 
 export default function Login() {
   const { login, signup } = useAuth();
@@ -28,7 +28,7 @@ export default function Login() {
     city: "",
     bio: "",
     avatarEmoji: "💘",
-    avatarColor: "#ff6b8a",
+    avatarColor: "#7cc8ff",
   });
 
   const [stats, setStats] = useState(null);
