@@ -158,6 +158,30 @@ export function initDb() {
       PRIMARY KEY (conversation_id, user_id)
     );
 
+    -- Photo verification (ported from dreamflirt_network's identity checks).
+    -- The selfie lives in a private folder, never under /uploads.
+    CREATE TABLE IF NOT EXISTS verifications (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      selfie_file TEXT NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+      reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      reviewed_at TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Virtual dates (ported from Bid-Love's date simulator).
+    CREATE TABLE IF NOT EXISTS virtual_dates (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      partner_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      scenario_key TEXT NOT NULL,
+      score        INTEGER NOT NULL,
+      sparks_spent INTEGER NOT NULL DEFAULT 0,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_verifications_user ON verifications(user_id, id);
     CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, id);
     CREATE INDEX IF NOT EXISTS idx_members_user ON conversation_members(user_id);
     CREATE INDEX IF NOT EXISTS idx_fans_target ON fans(target_id);
@@ -185,6 +209,7 @@ function migrate() {
   addColumn("profiles", "prompts", "prompts TEXT DEFAULT '[]'");
   addColumn("profiles", "premium_until", "premium_until TEXT");
   addColumn("conversations", "boosted_until", "boosted_until TEXT");
+  addColumn("profiles", "verified_at", "verified_at TEXT");
 }
 
 // helper: order a pair deterministically for the matches table

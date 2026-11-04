@@ -11,10 +11,12 @@ import CallRoom from "./pages/CallRoom.jsx";
 import Profile from "./pages/Profile.jsx";
 import UserProfile from "./pages/UserProfile.jsx";
 import Sparks from "./pages/Sparks.jsx";
+import VirtualDate from "./pages/VirtualDate.jsx";
+import AdminVerifications from "./pages/AdminVerifications.jsx";
 
 function Shell({ children }) {
   const location = useLocation();
-  const hideNav = /^\/(chats\/[^/]+(\/call)?|u\/[^/]+)$/.test(location.pathname);
+  const hideNav = /^\/(chats\/[^/]+(\/call)?|u\/[^/]+|date\/[^/]+)$/.test(location.pathname);
   const { bonus, clearBonus } = useAuth();
   return (
     <div className="app">
@@ -89,6 +91,8 @@ export default function App() {
         <Route path="/profile" element={<Profile />} />
         <Route path="/u/:id" element={<UserProfile />} />
         <Route path="/sparks" element={<Sparks />} />
+        <Route path="/date/:userId" element={<VirtualDate />} />
+        <Route path="/admin/verifications" element={<AdminVerifications />} />
         <Route path="*" element={<Navigate to="/discover" replace />} />
       </Routes>
     </Shell>

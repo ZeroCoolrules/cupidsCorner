@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../auth.jsx";
 import { api, apiUpload } from "../api.js";
 import Avatar from "../components/Avatar.jsx";
+import VerificationCard from "../components/VerificationCard.jsx";
 
 const EMOJIS = ["💘", "🌻", "🎸", "🌵", "📚", "🏔️", "🌊", "🍜", "🎺", "🪩", "🔥", "✨"];
 const COLORS = ["#7cc8ff", "#5b8def", "#3ec6a0", "#f4a259", "#7d5fff", "#4dd0e1", "#06d6a0", "#ffd166"];
@@ -173,6 +174,8 @@ export default function Profile() {
         </button>
       </div>
 
+      <VerificationCard />
+
       <form className="card" onSubmit={save}>
         <label>
           Display name
@@ -181,7 +184,7 @@ export default function Profile() {
         <div className="row">
           <label>
             Age
-            <input type="number" value={form.age} onChange={set("age")} />
+            <input type="number" min="18" max="120" value={form.age} onChange={set("age")} />
           </label>
           <label>
             City

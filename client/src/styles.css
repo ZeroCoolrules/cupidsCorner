@@ -1062,3 +1062,35 @@ code {
   font-weight: 700;
   font-size: 13px;
 }
+
+/* ---------- merged features: matching, verification, virtual dates ---------- */
+.hero-match {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 9px;
+  border-radius: 999px;
+}
+.match-reasons { color: var(--accent); font-size: 13px; font-weight: 600; margin: 2px 0 6px; }
+.verified {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  vertical-align: middle;
+}
+.verify-pair { display: flex; gap: 16px; align-items: flex-start; }
+.verify-selfie { width: 96px; height: 96px; object-fit: cover; border-radius: 16px; display: grid; place-items: center; }
+.date-option { display: block; width: 100%; text-align: left; margin-bottom: 12px; cursor: pointer; }
+.date-progress { font-size: 12px; color: var(--muted); font-weight: 700; margin-bottom: 4px; }
+.date-choice { display: block; width: 100%; text-align: left; margin-top: 8px; }
+.date-score { font-size: 56px; font-weight: 900; color: var(--accent); }
