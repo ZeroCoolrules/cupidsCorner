@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth.jsx";
+import { Link } from "react-router-dom";
 import { api } from "../api.js";
+import { usePublicConfig } from "../lib/config.js";
 
 const FEATURES = [
   { icon: "🔥", title: "Discover & match", body: "Swipe, match, and start talking." },
@@ -29,7 +31,9 @@ export default function Login() {
     bio: "",
     avatarEmoji: "💘",
     avatarColor: "#7cc8ff",
+    acceptTerms: false,
   });
+  const { demoMode } = usePublicConfig();
 
   const [stats, setStats] = useState(null);
   useEffect(() => {
@@ -117,7 +121,14 @@ export default function Login() {
         </label>
         <label>
           Password
-          <input type="password" value={form.password} onChange={set("password")} required />
+          <input
+            type="password"
+            value={form.password}
+            onChange={set("password")}
+            minLength={mode === "signup" ? 8 : undefined}
+            autoComplete={mode === "signup" ? "new-password" : "current-password"}
+            required
+          />
         </label>
 
         {mode === "signup" && (
@@ -179,19 +190,39 @@ export default function Login() {
           </>
         )}
 
+        {mode === "signup" && (
+          <label className="consent" htmlFor="accept-terms">
+            <input
+              id="accept-terms"
+              type="checkbox"
+              checked={form.acceptTerms}
+              onChange={(e) => setForm((f) => ({ ...f, acceptTerms: e.target.checked }))}
+              required
+            />
+            <span>
+              I'm 18 or older and I agree to the <Link to="/terms">Terms</Link>, <Link to="/privacy">Privacy Policy</Link> and{" "}
+              <Link to="/guidelines">Community Guidelines</Link>.
+            </span>
+          </label>
+        )}
+
         {error && <div className="error">{error}</div>}
 
         <button className="primary" disabled={busy}>
           {busy ? "…" : mode === "login" ? "Log in" : "Create account"}
         </button>
 
-        {mode === "login" && (
+        {mode === "login" && demoMode && (
           <p className="hint">
             Try a demo account — username <code>ava</code>, <code>leo</code>, or{" "}
             <code>mira</code>, password <code>password123</code>.
           </p>
         )}
       </form>
+
+      <p className="legal-links muted sm">
+        <Link to="/terms">Terms</Link> · <Link to="/privacy">Privacy</Link> · <Link to="/guidelines">Community Guidelines</Link>
+      </p>
     </div>
   );
 }

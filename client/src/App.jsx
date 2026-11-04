@@ -13,6 +13,14 @@ import UserProfile from "./pages/UserProfile.jsx";
 import Sparks from "./pages/Sparks.jsx";
 import VirtualDate from "./pages/VirtualDate.jsx";
 import AdminVerifications from "./pages/AdminVerifications.jsx";
+import AdminReports from "./pages/AdminReports.jsx";
+import Legal from "./pages/Legal.jsx";
+
+const legalRoutes = [
+  <Route key="terms" path="/terms" element={<Legal doc="terms" />} />,
+  <Route key="privacy" path="/privacy" element={<Legal doc="privacy" />} />,
+  <Route key="guidelines" path="/guidelines" element={<Legal doc="guidelines" />} />,
+];
 
 function Shell({ children }) {
   const location = useLocation();
@@ -71,6 +79,7 @@ export default function App() {
         <div className="screen">
           <Routes>
             <Route path="/login" element={<Login />} />
+            {legalRoutes}
             <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
         </div>
@@ -93,6 +102,8 @@ export default function App() {
         <Route path="/sparks" element={<Sparks />} />
         <Route path="/date/:userId" element={<VirtualDate />} />
         <Route path="/admin/verifications" element={<AdminVerifications />} />
+        <Route path="/admin/reports" element={<AdminReports />} />
+        {legalRoutes}
         <Route path="*" element={<Navigate to="/discover" replace />} />
       </Routes>
     </Shell>

@@ -1,16 +1,15 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
 #
 # Deploys Cupid's Corner as a single web service (Express serves both the
-# API and the built React client on one port). Uses Render's free plan by
-# default, which means SQLite data (accounts, matches, messages, uploaded
-# photos) does NOT survive a redeploy or restart — see the "Persistence"
-# section in README.md before treating this as more than a demo deploy.
+# API and the built React client on one port), with a persistent disk so
+# accounts, messages and photos survive restarts and deploys. Persistent
+# disks need a paid instance (starter or higher).
 
 services:
   - type: web
     name: cupids-corner
     runtime: node
-    plan: free
+    plan: starter
     branch: main
     buildCommand: npm install && npm run build
     startCommand: npm start
@@ -18,6 +17,21 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 24
+      - key: NODE_ENV
+        value: production
+      # Data on the persistent disk below.
+      - key: DB_PATH
+        value: /var/data/data.sqlite
+      - key: UPLOADS_DIR
+        value: /var/data/uploads
+      - key: VERIFICATIONS_DIR
+        value: /var/data/verifications
+      # Usernames that can review verifications and reports (comma-separated).
+      - key: ADMIN_USERNAMES
+        sync: false
+      # Shown in the Terms, Privacy Policy and Community Guidelines.
+      - key: SUPPORT_EMAIL
+        sync: false
       # Stream (chat + video) — optional, app runs without it.
       - key: STREAM_API_KEY
         sync: false
@@ -50,18 +64,7 @@ services:
       - key: CDP_API_KEY_SECRET
         sync: false
 
-    # --- Persistence (paid plans only) ---------------------------------
-    # Uncomment below, set `plan` above to `starter` or higher, and add
-    # matching DB_PATH / UPLOADS_DIR env vars to make data survive
-    # restarts and deploys. Without this, every deploy starts from an
-    # empty database and no uploaded photos.
-    #
-    # disk:
-    #   name: cupids-corner-data
-    #   mountPath: /var/data
-    #
-    # then add these env vars too:
-    #   - key: DB_PATH
-    #     value: /var/data/data.sqlite
-    #   - key: UPLOADS_DIR
-    #     value: /var/data/uploads
+    disk:
+      name: cupids-corner-data
+      mountPath: /var/data
+      sizeGB: 1

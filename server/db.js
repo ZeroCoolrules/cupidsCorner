@@ -210,6 +210,11 @@ function migrate() {
   addColumn("profiles", "premium_until", "premium_until TEXT");
   addColumn("conversations", "boosted_until", "boosted_until TEXT");
   addColumn("profiles", "verified_at", "verified_at TEXT");
+  addColumn("users", "banned_at", "banned_at TEXT");
+  addColumn("users", "ban_reason", "ban_reason TEXT");
+  addColumn("users", "terms_accepted_at", "terms_accepted_at TEXT");
+  addColumn("reports", "resolved_at", "resolved_at TEXT");
+  addColumn("reports", "resolution", "resolution TEXT");
 }
 
 // helper: order a pair deterministically for the matches table

@@ -3,6 +3,12 @@ import { db, initDb } from "./db.js";
 import { CUPID_WELCOME } from "./cupid.js";
 import { GIFT_BY_KEY } from "./gifts.js";
 
+// Demo profiles are fake people. Never put them in front of real users.
+if (process.env.NODE_ENV === "production" && !process.argv.includes("--force")) {
+  console.error("Refusing to seed demo users in production (NODE_ENV=production). Pass --force to override.");
+  process.exit(1);
+}
+
 initDb();
 
 const DEMO_PASSWORD = "password123";

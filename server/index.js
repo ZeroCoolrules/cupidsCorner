@@ -66,6 +66,52 @@ const ADMIN_USERNAMES = new Set(
     .filter(Boolean)
 );
 const MIN_AGE = 18;
+const MIN_PASSWORD = 8;
+const SESSION_DAYS = 30;
+// Public contact for support, privacy and safety requests (shown in Terms/Privacy).
+const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "";
+// Shows the demo-account hint on the login page. Leave off in production.
+const DEMO_MODE = process.env.DEMO_MODE === "1";
+// Comma-separated origins allowed to call the API cross-origin. The client is
+// served from the same origin, so production normally needs none.
+const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+// Tiny in-memory fixed-window rate limiter (one process, so this is enough).
+function rateLimit({ windowMs, max, message }) {
+  const hits = new Map();
+  setInterval(() => {
+    const now = Date.now();
+    for (const [k, v] of hits) if (v.reset < now) hits.delete(k);
+  }, windowMs).unref();
+  return (req, res, next) => {
+    const key = req.ip;
+    const now = Date.now();
+    let h = hits.get(key);
+    if (!h || h.reset < now) {
+      h = { count: 0, reset: now + windowMs };
+      hits.set(key, h);
+    }
+    h.count += 1;
+    if (h.count > max) {
+      res.set("Retry-After", String(Math.ceil((h.reset - now) / 1000)));
+      return res.status(429).json({ error: message });
+    }
+    next();
+  };
+}
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: "Too many attempts. Wait a few minutes and try again.",
+});
+const reportLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  message: "You've sent a lot of reports. Try again later.",
+});
 
 initDb();
 
@@ -73,7 +119,23 @@ const app = express();
 // Render terminates TLS in front of us; trust it so req.protocol is "https"
 // (x402 builds the 402 `resource.url` from it).
 app.set("trust proxy", 1);
-app.use(cors());
+app.use(
+  cors({
+    origin: (origin, cb) => cb(null, !origin || ALLOWED_ORIGINS.includes(origin)),
+  })
+);
+// Basic hardening headers. The React client loads Stream and Stripe from
+// their own hosts, so no strict CSP here.
+app.use((req, res, next) => {
+  res.set({
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "geolocation=(), payment=(self)",
+  });
+  if (req.secure) res.set("Strict-Transport-Security", "max-age=15552000");
+  next();
+});
 
 // Stripe needs the raw, unparsed request body to verify its signature, so
 // this route is registered before the global express.json() below.
@@ -182,9 +244,24 @@ const q = {
   ),
   insertSession: db.prepare("INSERT INTO sessions (token, user_id) VALUES (?, ?)"),
   sessionByToken: db.prepare(`
-    SELECT s.token, s.user_id, u.username FROM sessions s
-    JOIN users u ON u.id = s.user_id WHERE s.token = ?
+    SELECT s.token, s.user_id, u.username, u.banned_at FROM sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.token = ? AND s.created_at > datetime('now', '-' || ? || ' days')
   `),
+  deleteUserSessions: db.prepare("DELETE FROM sessions WHERE user_id = ?"),
+  deleteExpiredSessions: db.prepare("DELETE FROM sessions WHERE created_at <= datetime('now', '-' || ? || ' days')"),
+  acceptTerms: db.prepare("UPDATE users SET terms_accepted_at = datetime('now') WHERE id = ?"),
+  deleteUser: db.prepare("DELETE FROM users WHERE id = ?"),
+  banUser: db.prepare("UPDATE users SET banned_at = datetime('now'), ban_reason = ? WHERE id = ?"),
+  openReports: db.prepare(`
+    SELECT r.*, u.banned_at FROM reports r JOIN users u ON u.id = r.reported_id
+    WHERE r.resolved_at IS NULL ORDER BY r.id ASC LIMIT 200
+  `),
+  resolveReport: db.prepare("UPDATE reports SET resolved_at = datetime('now'), resolution = ? WHERE id = ?"),
+  resolveReportsFor: db.prepare(
+    "UPDATE reports SET resolved_at = datetime('now'), resolution = ? WHERE reported_id = ? AND resolved_at IS NULL"
+  ),
+  verificationsFor: db.prepare("SELECT selfie_file FROM verifications WHERE user_id = ?"),
   deleteSession: db.prepare("DELETE FROM sessions WHERE token = ?"),
   insertSwipe: db.prepare(
     "INSERT INTO swipes (swiper_id, target_id, direction) VALUES (?, ?, ?) ON CONFLICT(swiper_id, target_id) DO UPDATE SET direction=excluded.direction"
@@ -322,6 +399,7 @@ const q = {
     SELECT swiper_id FROM swipes
     WHERE target_id = ? AND direction = 'like'
       AND swiper_id NOT IN (SELECT target_id FROM swipes WHERE swiper_id = ?)
+      AND swiper_id NOT IN (SELECT id FROM users WHERE banned_at IS NOT NULL)
   `),
   publicRoomsRanked: db.prepare(`
     SELECT *, (boosted_until IS NOT NULL AND boosted_until > datetime('now')) AS is_boosted
@@ -410,8 +488,9 @@ function publicUser(userId) {
 function auth(req, res, next) {
   const header = req.get("authorization") || "";
   const token = header.replace(/^Bearer\s+/i, "").trim();
-  const sess = token && q.sessionByToken.get(token);
+  const sess = token && q.sessionByToken.get(token, SESSION_DAYS);
   if (!sess) return res.status(401).json({ error: "Not signed in" });
+  if (sess.banned_at) return res.status(403).json({ error: "This account has been suspended." });
   req.userId = sess.user_id;
   req.username = sess.username;
   q.touchLastSeen.run(req.userId);
@@ -448,6 +527,10 @@ app.get("/healthz", (req, res) => {
 // public stats (no auth) — powers the landing page's "presence" strip
 // ---------------------------------------------------------------------------
 
+app.get("/api/public/config", (req, res) => {
+  res.json({ supportEmail: SUPPORT_EMAIL, demoMode: DEMO_MODE, minAge: MIN_AGE });
+});
+
 app.get("/api/public/stats", (req, res) => {
   const members = db.prepare("SELECT COUNT(*) c FROM users").get().c;
   const rooms = db.prepare("SELECT COUNT(*) c FROM conversations WHERE type='room'").get().c;
@@ -460,7 +543,7 @@ app.get("/api/public/stats", (req, res) => {
 // auth routes
 // ---------------------------------------------------------------------------
 
-app.post("/api/auth/signup", (req, res) => {
+app.post("/api/auth/signup", authLimiter, (req, res) => {
   const {
     username,
     password,
@@ -473,6 +556,7 @@ app.post("/api/auth/signup", (req, res) => {
     avatarEmoji = "💘",
     avatarColor = "#7cc8ff",
     interests = [],
+    acceptTerms = false,
   } = req.body || {};
 
   if (!username || !password || !displayName) {
@@ -482,8 +566,14 @@ app.post("/api/auth/signup", (req, res) => {
   }
   const tooYoung = ageError(age);
   if (tooYoung) return res.status(400).json({ error: tooYoung });
-  if (String(password).length < 6) {
-    return res.status(400).json({ error: "password must be at least 6 characters" });
+  if (acceptTerms !== true) {
+    return res.status(400).json({ error: "Please confirm you're 18+ and agree to the Terms and Privacy Policy." });
+  }
+  if (!/^[A-Za-z0-9_.]{3,24}$/.test(String(username).trim())) {
+    return res.status(400).json({ error: "Usernames are 3-24 letters, numbers, dots or underscores." });
+  }
+  if (String(password).length < MIN_PASSWORD) {
+    return res.status(400).json({ error: `Passwords need at least ${MIN_PASSWORD} characters.` });
   }
   if (q.userByName.get(username)) {
     return res.status(409).json({ error: "That username is taken" });
@@ -492,6 +582,7 @@ app.post("/api/auth/signup", (req, res) => {
   const hash = bcrypt.hashSync(String(password), 10);
   const info = q.insertUser.run(String(username).trim(), hash);
   const userId = Number(info.lastInsertRowid);
+  q.acceptTerms.run(userId);
   q.insertProfile.run({
     user_id: userId,
     display_name: String(displayName).trim(),
@@ -511,11 +602,14 @@ app.post("/api/auth/signup", (req, res) => {
   res.json({ token, user: publicUser(userId) });
 });
 
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", authLimiter, (req, res) => {
   const { username, password } = req.body || {};
   const user = username && q.userByName.get(String(username).trim());
   if (!user || !bcrypt.compareSync(String(password || ""), user.password_hash)) {
     return res.status(401).json({ error: "Wrong username or password" });
+  }
+  if (user.banned_at) {
+    return res.status(403).json({ error: "This account has been suspended." });
   }
   const token = crypto.randomBytes(24).toString("hex");
   q.insertSession.run(token, user.id);
@@ -594,6 +688,22 @@ app.delete("/api/me/photo", auth, (req, res) => {
   res.json({ user: publicUser(req.userId) });
 });
 
+// Permanently deletes the account and everything that cascades from it
+// (profile, swipes, matches, messages, gifts, reports they made...).
+app.delete("/api/me", auth, (req, res) => {
+  const user = q.userById.get(req.userId);
+  if (!bcrypt.compareSync(String(req.body?.password || ""), user.password_hash)) {
+    return res.status(401).json({ error: "That password isn't right." });
+  }
+  const profile = q.profileById.get(req.userId);
+  if (profile?.photo_url) fs.unlink(path.join(uploadsDir, path.basename(profile.photo_url)), () => {});
+  for (const v of q.verificationsFor.all(req.userId)) {
+    fs.unlink(path.join(verificationsDir, path.basename(v.selfie_file)), () => {});
+  }
+  q.deleteUser.run(req.userId);
+  res.json({ ok: true });
+});
+
 app.get("/api/prompts/bank", (req, res) => {
   res.json({ bank: PROMPT_BANK });
 });
@@ -602,7 +712,9 @@ app.get("/api/prompts/bank", (req, res) => {
 app.get("/api/users/:id", auth, (req, res) => {
   const id = Number(req.params.id);
   const user = publicUser(id);
-  if (!user) return res.status(404).json({ error: "no such user" });
+  if (!user || (id !== req.userId && q.userById.get(id)?.banned_at)) {
+    return res.status(404).json({ error: "no such user" });
+  }
   const rating = q.ratingSummary.get(id);
   const mine = q.myRating.get(req.userId, id);
   res.json({
@@ -639,7 +751,7 @@ app.delete("/api/users/:id/block", auth, async (req, res) => {
   res.json({ ok: true, blocked: false });
 });
 
-app.post("/api/users/:id/report", auth, (req, res) => {
+app.post("/api/users/:id/report", auth, reportLimiter, (req, res) => {
   const id = Number(req.params.id);
   if (!q.userById.get(id)) return res.status(404).json({ error: "no such user" });
   const reason = String(req.body?.reason || "").trim().slice(0, 500) || "No reason given";
@@ -816,6 +928,43 @@ app.get("/api/admin/verifications/:id/selfie", auth, adminOnly, (req, res) => {
   res.sendFile(path.join(verificationsDir, path.basename(v.selfie_file)));
 });
 
+app.get("/api/admin/reports", auth, adminOnly, (req, res) => {
+  const byUser = new Map();
+  for (const r of q.openReports.all()) {
+    if (!byUser.has(r.reported_id)) {
+      byUser.set(r.reported_id, {
+        user: publicUser(r.reported_id),
+        banned: !!r.banned_at,
+        reporters: new Set(),
+        reports: [],
+      });
+    }
+    const g = byUser.get(r.reported_id);
+    g.reporters.add(r.reporter_id);
+    g.reports.push({ id: r.id, reason: r.reason, createdAt: r.created_at });
+  }
+  const items = [...byUser.values()]
+    .map((g) => ({ ...g, reporterCount: g.reporters.size, reporters: undefined }))
+    .sort((a, b) => b.reporterCount - a.reporterCount);
+  res.json({ items });
+});
+
+app.post("/api/admin/users/:id/dismiss-reports", auth, adminOnly, (req, res) => {
+  q.resolveReportsFor.run("dismissed", Number(req.params.id));
+  res.json({ ok: true });
+});
+
+app.post("/api/admin/users/:id/ban", auth, adminOnly, (req, res) => {
+  const id = Number(req.params.id);
+  const target = q.userById.get(id);
+  if (!target) return res.status(404).json({ error: "no such user" });
+  if (isAdmin(target.username)) return res.status(400).json({ error: "can't ban an admin" });
+  q.banUser.run(String(req.body?.reason || "").slice(0, 300) || "Community guidelines", id);
+  q.deleteUserSessions.run(id);
+  q.resolveReportsFor.run("banned", id);
+  res.json({ ok: true });
+});
+
 app.post("/api/admin/verifications/:id/decision", auth, adminOnly, (req, res) => {
   const v = q.verificationById.get(Number(req.params.id));
   if (!v) return res.status(404).json({ error: "not found" });
@@ -884,6 +1033,7 @@ app.get("/api/discover", auth, (req, res) => {
     "p.user_id NOT IN (SELECT target_id FROM swipes WHERE swiper_id = ?)",
     "p.user_id NOT IN (SELECT blocked_id FROM blocks WHERE blocker_id = ?)",
     "p.user_id NOT IN (SELECT blocker_id FROM blocks WHERE blocked_id = ?)",
+    "u.banned_at IS NULL",
   ];
   const params = [req.userId, req.userId, req.userId, req.userId];
 
@@ -1509,6 +1659,9 @@ async function backfillStreamChannels() {
   }
   console.log(`[stream] synced ${convs.length} conversation channel(s)`);
 }
+
+q.deleteExpiredSessions.run(SESSION_DAYS);
+setInterval(() => q.deleteExpiredSessions.run(SESSION_DAYS), 6 * 60 * 60 * 1000).unref();
 
 app.listen(PORT, () => {
   console.log(`Cupid's Corner API on http://localhost:${PORT}`);
