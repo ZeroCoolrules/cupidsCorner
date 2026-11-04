@@ -129,7 +129,7 @@ export default function Login() {
             <div className="row">
               <label>
                 Age
-                <input type="number" min="18" max="120" value={form.age} onChange={set("age")} />
+                <input type="number" min="18" max="120" value={form.age} onChange={set("age")} required />
               </label>
               <label>
                 City

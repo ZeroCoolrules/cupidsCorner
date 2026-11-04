@@ -8,6 +8,28 @@ A full-stack app that blends five things into one:
 
 A logged-out visitor lands on a real homepage (hero, live member/room/gift stats, feature grid) rather than a bare login form — that's the "presence" layer.
 
+## One app from six repos
+
+Cupid's Corner is now the single home for the dating projects. It already had the most complete feature set, so the others were folded into it:
+
+| Repo | What it brought | What came over |
+| --- | --- | --- |
+| cupidsCorner | Swipe, matches, rooms, Stream chat and video, gifts, Premium, Stripe, Cupid AI | Base app |
+| Bid-Love- | Date simulator with choices and chemistry | **Virtual dates** with your matches (`server/virtualDates.js`). Bidding on people and cashing tokens out were left behind on purpose. |
+| dreamflirt_network | Identity verification and review | **Photo verification** with an admin review queue and a ✔ badge |
+| emerald-connect-copy | Live streams, coins, gifts | Already covered by public rooms, gifts, and sparks |
+| kikchat | Real-time chat, rooms, video tokens | Already covered by Stream chat, rooms, and calls |
+| dating-pro | PG Dating Pro (a commercial, licensed script) | Nothing copied: its license doesn't allow reuse. Its paid features (memberships, pay-to-message, gifts) map to Premium, sparks, and gifts here. |
+
+### How Discover ranks people
+
+`server/matching.js` scores each candidate instead of showing Premium members first and the rest at random. Everyone under 18, blocked, already swiped, reported by 3+ people, or outside either person's "looking for" is filtered out. The rest are ranked by shared interests, same city, whether they already liked you, recent activity, verification, profile completeness, a new-member boost, Premium, and age gap. Cards show a match % and up to three reasons ("You both like film", "Also in Brooklyn"). All weights live in one `WEIGHTS` object.
+
+### Safety additions
+
+- Sign-up and profile edits require age 18+.
+- Verification selfies are stored outside `/uploads`, only admins (`ADMIN_USERNAMES`) can view them, and they are deleted after review.
+
 ## Stack
 
 - **Backend** — Node + Express, SQLite via the built-in `node:sqlite` module (no native build step). Token sessions, bcrypt password hashing.

@@ -42,6 +42,8 @@ import {
 } from "./billing.js";
 import { parseProfiles, compatibility } from "./compat.js";
 import { COMPAT_ROUTE, isX402Configured, x402Gate } from "./x402.js";
+import { DATE_SCENARIOS, scoreDate, verdictFor } from "./virtualDates.js";
+import { scoreCandidate, matchPercent } from "./matching.js";
 
 export const REACTION_EMOJIS = ["❤️", "😂", "👍", "😮", "😢"];
 
@@ -51,6 +53,19 @@ const PORT = process.env.PORT || 8787;
 // can be pointed at without code changes — see README "Deploy to Render".
 const uploadsDir = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
 fs.mkdirSync(uploadsDir, { recursive: true });
+// Verification selfies are private: never served by express.static. Only
+// admins can fetch them, through an authed route.
+const verificationsDir = process.env.VERIFICATIONS_DIR || path.join(__dirname, "verifications");
+fs.mkdirSync(verificationsDir, { recursive: true });
+
+// Comma-separated usernames allowed to review photo verifications.
+const ADMIN_USERNAMES = new Set(
+  String(process.env.ADMIN_USERNAMES || "")
+    .split(",")
+    .map((u) => u.trim().toLowerCase())
+    .filter(Boolean)
+);
+const MIN_AGE = 18;
 
 initDb();
 
@@ -92,6 +107,18 @@ const upload = multer({
   }),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => cb(null, /^image\/(jpeg|png|webp|gif)$/.test(file.mimetype)),
+});
+
+const verificationUpload = multer({
+  storage: multer.diskStorage({
+    destination: verificationsDir,
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase().slice(0, 5);
+      cb(null, `v${req.userId}-${Date.now()}${ext}`);
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => cb(null, /^image\/(jpeg|png|webp)$/.test(file.mimetype)),
 });
 
 // Runs a Stream sync call best-effort: never lets a Stream hiccup break the
@@ -320,7 +347,41 @@ const q = {
       last_read_id = MAX(last_read_id, excluded.last_read_id), updated_at = datetime('now')
   `),
   readStateAll: db.prepare("SELECT user_id, last_read_id FROM read_state WHERE conversation_id = ?"),
+  latestVerification: db.prepare(
+    "SELECT * FROM verifications WHERE user_id = ? ORDER BY id DESC LIMIT 1"
+  ),
+  insertVerification: db.prepare(
+    "INSERT INTO verifications (user_id, selfie_file) VALUES (?, ?)"
+  ),
+  verificationById: db.prepare("SELECT * FROM verifications WHERE id = ?"),
+  pendingVerifications: db.prepare(
+    "SELECT * FROM verifications WHERE status = 'pending' ORDER BY id ASC LIMIT 50"
+  ),
+  decideVerification: db.prepare(
+    "UPDATE verifications SET status = ?, reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?"
+  ),
+  setVerifiedAt: db.prepare("UPDATE profiles SET verified_at = ? WHERE user_id = ?"),
+  matchBetween: db.prepare("SELECT 1 FROM matches WHERE user_a = ? AND user_b = ?"),
+  insertVirtualDate: db.prepare(
+    "INSERT INTO virtual_dates (user_id, partner_id, scenario_key, score, sparks_spent) VALUES (?, ?, ?, ?, ?)"
+  ),
+  spendSparks: db.prepare(
+    "UPDATE profiles SET sparks = sparks - ? WHERE user_id = ? AND sparks >= ?"
+  ),
 };
+
+function isAdmin(username) {
+  return ADMIN_USERNAMES.has(String(username || "").toLowerCase());
+}
+
+// Returns an error message when `age` is missing or under the minimum.
+function ageError(age) {
+  const n = Number(age);
+  if (!Number.isInteger(n) || n < MIN_AGE || n > 120) {
+    return `You must be ${MIN_AGE} or older to use Cupid's Corner.`;
+  }
+  return null;
+}
 
 function publicUser(userId) {
   const p = q.profileById.get(userId);
@@ -342,6 +403,7 @@ function publicUser(userId) {
     lastSeenAt: p.last_seen_at,
     premiumUntil: p.premium_until || null,
     isPremium: !!q.isPremium.get(userId)?.active,
+    isVerified: !!p.verified_at,
   };
 }
 
@@ -418,6 +480,8 @@ app.post("/api/auth/signup", (req, res) => {
       .status(400)
       .json({ error: "username, password and displayName are required" });
   }
+  const tooYoung = ageError(age);
+  if (tooYoung) return res.status(400).json({ error: tooYoung });
   if (String(password).length < 6) {
     return res.status(400).json({ error: "password must be at least 6 characters" });
   }
@@ -431,7 +495,7 @@ app.post("/api/auth/signup", (req, res) => {
   q.insertProfile.run({
     user_id: userId,
     display_name: String(displayName).trim(),
-    age: age ? Number(age) : null,
+    age: Number(age),
     gender: String(gender),
     orientation: String(orientation),
     bio: String(bio),
@@ -476,6 +540,10 @@ app.get("/api/me", auth, (req, res) => {
 app.put("/api/me", auth, (req, res) => {
   const cur = q.profileById.get(req.userId);
   const b = req.body || {};
+  if (b.age != null && b.age !== "") {
+    const tooYoung = ageError(b.age);
+    if (tooYoung) return res.status(400).json({ error: tooYoung });
+  }
   q.updateProfile.run({
     user_id: req.userId,
     display_name: String(b.displayName ?? cur.display_name).trim(),
@@ -697,6 +765,116 @@ app.post("/api/gifts/send", auth, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// photo verification (ported from dreamflirt_network)
+// ---------------------------------------------------------------------------
+
+function verificationView(v) {
+  return v ? { id: v.id, status: v.status, createdAt: v.created_at, reviewedAt: v.reviewed_at } : null;
+}
+
+app.get("/api/me/verification", auth, (req, res) => {
+  res.json({
+    verification: verificationView(q.latestVerification.get(req.userId)),
+    isVerified: !!q.profileById.get(req.userId).verified_at,
+    isAdmin: isAdmin(req.username),
+  });
+});
+
+app.post("/api/me/verification", auth, verificationUpload.single("selfie"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "Upload a jpg, png, or webp selfie under 5MB." });
+  }
+  const latest = q.latestVerification.get(req.userId);
+  if (latest?.status === "pending") {
+    fs.unlink(req.file.path, () => {});
+    return res.status(409).json({ error: "Your last selfie is still being reviewed." });
+  }
+  if (q.profileById.get(req.userId).verified_at) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(409).json({ error: "You're already verified." });
+  }
+  q.insertVerification.run(req.userId, req.file.filename);
+  res.json({ verification: verificationView(q.latestVerification.get(req.userId)) });
+});
+
+function adminOnly(req, res, next) {
+  if (!isAdmin(req.username)) return res.status(403).json({ error: "admins only" });
+  next();
+}
+
+app.get("/api/admin/verifications", auth, adminOnly, (req, res) => {
+  const items = q.pendingVerifications.all().map((v) => ({
+    ...verificationView(v),
+    user: publicUser(v.user_id),
+  }));
+  res.json({ items });
+});
+
+app.get("/api/admin/verifications/:id/selfie", auth, adminOnly, (req, res) => {
+  const v = q.verificationById.get(Number(req.params.id));
+  if (!v) return res.status(404).json({ error: "not found" });
+  res.sendFile(path.join(verificationsDir, path.basename(v.selfie_file)));
+});
+
+app.post("/api/admin/verifications/:id/decision", auth, adminOnly, (req, res) => {
+  const v = q.verificationById.get(Number(req.params.id));
+  if (!v) return res.status(404).json({ error: "not found" });
+  if (v.status !== "pending") return res.status(409).json({ error: "already decided" });
+  const approve = req.body?.approve === true;
+  q.decideVerification.run(approve ? "approved" : "rejected", req.userId, v.id);
+  if (approve) q.setVerifiedAt.run(new Date().toISOString(), v.user_id);
+  // The selfie is only needed for review; don't keep it afterwards.
+  fs.unlink(path.join(verificationsDir, path.basename(v.selfie_file)), () => {});
+  res.json({ ok: true, status: approve ? "approved" : "rejected" });
+});
+
+// ---------------------------------------------------------------------------
+// virtual dates (ported from Bid-Love)
+// ---------------------------------------------------------------------------
+
+app.get("/api/dates/scenarios", auth, (req, res) => {
+  res.json({ scenarios: DATE_SCENARIOS, sparks: q.profileById.get(req.userId).sparks });
+});
+
+app.post("/api/dates", auth, async (req, res) => {
+  const partnerId = Number(req.body?.partnerId);
+  if (!partnerId || partnerId === req.userId || !q.userById.get(partnerId)) {
+    return res.status(400).json({ error: "bad partner" });
+  }
+  if (!q.matchBetween.get(...pair(req.userId, partnerId))) {
+    return res.status(403).json({ error: "You can only go on virtual dates with your matches." });
+  }
+  if (q.isBlocked.get(req.userId, partnerId, partnerId, req.userId)) {
+    return res.status(403).json({ error: "unavailable" });
+  }
+  let outcome;
+  try {
+    outcome = scoreDate(String(req.body?.scenarioKey || ""), req.body?.choices);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+  const { scenario, score, cost } = outcome;
+  if (cost > 0 && q.spendSparks.run(cost, req.userId, cost).changes === 0) {
+    return res.status(400).json({ error: `Not enough sparks — this date costs ${cost}.` });
+  }
+  q.insertVirtualDate.run(req.userId, partnerId, scenario.key, score, cost);
+
+  const verdict = verdictFor(score);
+  const dm = q.dmBetween.get(req.userId, partnerId);
+  if (dm) {
+    const me = publicUser(req.userId).displayName;
+    await announce(dm.id, `${scenario.emoji} ${me} took you on a virtual date at the ${scenario.title}: ${score}% chemistry. ${verdict}!`);
+  }
+  res.json({
+    score,
+    verdict,
+    sparksSpent: cost,
+    sparks: q.profileById.get(req.userId).sparks,
+    conversationId: dm ? dm.id : null,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // discovery + swiping
 // ---------------------------------------------------------------------------
 
@@ -732,15 +910,32 @@ app.get("/api/discover", auth, (req, res) => {
     }
   }
 
-  const rows = db
+  // Pull a wide pool, then rank it in JS (see server/matching.js).
+  const me = q.profileById.get(req.userId);
+  const pool = db
     .prepare(
-      `SELECT p.user_id FROM profiles p
+      `SELECT p.*, u.created_at,
+         (p.premium_until IS NOT NULL AND p.premium_until > datetime('now')) AS is_premium,
+         EXISTS (SELECT 1 FROM swipes s WHERE s.swiper_id = p.user_id AND s.target_id = ? AND s.direction = 'like') AS liked_me,
+         (SELECT COUNT(DISTINCT r.reporter_id) FROM reports r WHERE r.reported_id = p.user_id) AS report_count
+       FROM profiles p JOIN users u ON u.id = p.user_id
        WHERE ${clauses.join(" AND ")}
-       ORDER BY (p.premium_until IS NOT NULL AND p.premium_until > datetime('now')) DESC, RANDOM()
-       LIMIT 25`
+       LIMIT 300`
     )
-    .all(...params);
-  res.json({ profiles: rows.map((r) => publicUser(r.user_id)) });
+    .all(req.userId, ...params);
+
+  const ranked = pool
+    .map((c) => ({ c, s: scoreCandidate(me, c) }))
+    .filter((x) => x.s)
+    .sort((a, b) => b.s.score - a.s.score)
+    .slice(0, 25);
+
+  res.json({
+    profiles: ranked.map(({ c, s }) => ({
+      ...publicUser(c.user_id),
+      match: { percent: matchPercent(s.score), reasons: s.reasons },
+    })),
+  });
 });
 
 app.post("/api/swipe", auth, async (req, res) => {

@@ -60,6 +60,13 @@ export default function Matches() {
               >
                 View profile
               </Link>
+              <Link
+                to={`/date/${m.user.id}`}
+                className="profile-link"
+                onClick={(e) => e.stopPropagation()}
+              >
+                🌃 Virtual date
+              </Link>
             </button>
           ))}
         </div>

@@ -103,12 +103,17 @@ export default function Discover() {
                   <span>{p.avatarEmoji}</span>
                 )}
                 {p.isPremium && <span className="hero-premium">👑 Premium</span>}
+                {p.match && <span className="hero-match">{p.match.percent}% match</span>}
               </div>
               <div className="profile-body">
                 <h3>
                   {p.displayName}
                   {p.age ? <span className="age">{p.age}</span> : null}
+                  {p.isVerified && <span className="verified" title="Photo verified">✔</span>}
                 </h3>
+                {p.match?.reasons?.length > 0 && (
+                  <p className="match-reasons">{p.match.reasons.join(" · ")}</p>
+                )}
                 <p className="muted">
                   {[p.city, p.gender, p.orientation].filter(Boolean).join(" · ")}
                 </p>

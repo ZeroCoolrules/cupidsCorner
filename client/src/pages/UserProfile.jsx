@@ -122,6 +122,7 @@ export default function UserProfile() {
           <div className="chat-title">
             {user.displayName}
             {user.age ? <span className="age">{user.age}</span> : null}
+            {user.isVerified && <span className="verified" title="Photo verified">✔</span>}
           </div>
           <div className="muted sm">
             {[user.city, user.gender, user.orientation].filter(Boolean).join(" · ") || "—"}
