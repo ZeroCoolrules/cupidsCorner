@@ -4,6 +4,7 @@ import { useAuth } from "../auth.jsx";
 import { api, apiUpload } from "../api.js";
 import Avatar from "../components/Avatar.jsx";
 import VerificationCard from "../components/VerificationCard.jsx";
+import DeleteAccount from "../components/DeleteAccount.jsx";
 
 const EMOJIS = ["💘", "🌻", "🎸", "🌵", "📚", "🏔️", "🌊", "🍜", "🎺", "🪩", "🔥", "✨"];
 const COLORS = ["#7cc8ff", "#5b8def", "#3ec6a0", "#f4a259", "#7d5fff", "#4dd0e1", "#06d6a0", "#ffd166"];
@@ -264,6 +265,13 @@ export default function Profile() {
         </button>
         {saved && <div className="ok">Saved ✓</div>}
       </form>
+
+      <div className="profile-footer">
+        <DeleteAccount />
+        <p className="legal-links muted sm">
+          <Link to="/terms">Terms</Link> · <Link to="/privacy">Privacy</Link> · <Link to="/guidelines">Community Guidelines</Link>
+        </p>
+      </div>
     </div>
   );
 }

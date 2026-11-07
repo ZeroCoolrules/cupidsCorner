@@ -65,6 +65,10 @@ export default function VerificationCard() {
           <Link to="/admin/verifications" className="profile-link">
             Review pending verifications
           </Link>
+          {" · "}
+          <Link to="/admin/reports" className="profile-link">
+            Review reports
+          </Link>
         </div>
       )}
     </div>

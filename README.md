@@ -84,6 +84,17 @@ npm run build    # builds client into client/dist
 npm start        # Express serves the API + the built client on :8787
 ```
 
+## Go live checklist
+
+1. Deploy with the Render blueprint below. It uses the **starter** plan with a 1 GB persistent disk, so accounts and photos survive restarts (Render bills the instance and disk monthly).
+2. Set `ADMIN_USERNAMES` to your own username, and `SUPPORT_EMAIL` to an inbox you read. The email shows in the Terms, Privacy Policy and Community Guidelines.
+3. Sign up on the live site with that username. Your profile page then shows "Review pending verifications" and "Review reports".
+4. Optional but recommended: Stream keys (chat and video), Stripe keys plus the webhook (sparks purchases), and a Cupid LLM key.
+5. Don't run `npm run seed` in production: the demo members are fake people. The seed script refuses when `NODE_ENV=production`.
+6. Have the Terms and Privacy Policy (`client/src/pages/Legal.jsx`) reviewed by a lawyer when you can; they are a starting point, not legal advice.
+
+What protects users at launch: 18+ check and terms consent at sign-up, rate-limited login and sign-up, 8-character passwords, 30-day sessions, report and block on every profile, an admin reports queue that can suspend accounts, photo verification, and self-serve account deletion.
+
 ## Deploy to Render
 
 The app is a single Express process (API + the built React client on one port), which maps directly onto a Render **Web Service**. A [render.yaml](render.yaml) blueprint is included.
@@ -104,8 +115,7 @@ The app is a single Express process (API + the built React client on one port), 
 Render's **free** plan has no persistent disk: every deploy or restart wipes the SQLite database and any uploaded photos back to empty. That's fine for a demo/portfolio link, not for real users' data.
 
 To make data durable:
-1. In `render.yaml`, bump `plan: free` to `plan: starter` (or higher — persistent disks need a paid instance) and uncomment the `disk:` block plus its `DB_PATH` / `UPLOADS_DIR` env vars.
-2. Redeploy. `server/db.js` and `server/index.js` already read `DB_PATH` and `UPLOADS_DIR` from the environment, so no code changes are needed — just those two env vars pointing at the mounted disk.
+`render.yaml` now ships with `plan: starter`, a persistent disk at `/var/data`, and `DB_PATH`, `UPLOADS_DIR` and `VERIFICATIONS_DIR` pointing at it. To run a throwaway demo on the free plan instead, set `plan: free` and remove the `disk:` block; every restart then wipes all data.
 
 For a "real" production setup rather than a durable demo, the more common path is swapping SQLite for Render's managed Postgres — that's a genuine migration (different SQL dialect, a driver swap, rewriting every `db.prepare(...)` call in `server/index.js`/`db.js`/`seed.js`), not a config change, so it's not done here. Ask if you want that.
 
