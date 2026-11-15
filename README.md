@@ -102,7 +102,7 @@ The app is a single Express process (API + the built React client on one port), 
 ### One-time setup
 
 1. Push this repo to GitHub (see **Push to GitHub** below if it isn't there yet).
-2. In the [Render dashboard](https://dashboard.render.com), **New → Blueprint**, pick the repo. Render reads `render.yaml` and creates the service — build command `npm install && npm run build`, start command `npm start`, health check `/healthz`.
+2. In the [Render dashboard](https://dashboard.render.com), **New → Blueprint**, pick the repo. Render reads `render.yaml` and creates the service — build command `npm install --include=dev && npm run build`, start command `npm start`, health check `/healthz`.
 3. Set the secret env vars Render will prompt for (all optional — leave blank to skip that feature):
    - `STREAM_API_KEY`, `STREAM_API_SECRET` — video + chat
    - `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` — buying sparks

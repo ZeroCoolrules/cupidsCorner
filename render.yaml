@@ -11,7 +11,9 @@ services:
     runtime: node
     plan: starter
     branch: main
-    buildCommand: npm install && npm run build
+    # --include=dev: with NODE_ENV=production npm skips devDependencies,
+    # and the client build needs Vite from them.
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /healthz
     envVars:
