@@ -184,3 +184,85 @@ export async function getOrCreateRoomCall(conversationId, members, createdById) 
   }
   return { callType: "default", callId };
 }
+
+// ---------------------------------------------------------------------------
+// Live broadcasts (Go Live) — one host plus up to a few co-hosts publish,
+// everyone else watches. Uses Stream's "livestream" call type: members with
+// the "host" role can publish and take the call live, plain users can only
+// watch. Co-hosting is just flipping someone's call role to "host".
+// ---------------------------------------------------------------------------
+
+function liveCallId(streamId) {
+  return `live-${streamId}`;
+}
+
+function streamUser(p) {
+  return {
+    id: String(p.id),
+    name: p.displayName,
+    role: "user",
+    custom: { emoji: p.avatarEmoji, color: p.avatarColor },
+  };
+}
+
+export async function createLiveCall(streamId, host, title) {
+  const c = getClient();
+  if (!c) {
+    warnOnce();
+    return null;
+  }
+  await c.upsertUsers([streamUser(host)]);
+  const call = c.video.call("livestream", liveCallId(streamId));
+  await call.getOrCreate({
+    data: {
+      created_by_id: String(host.id),
+      members: [{ user_id: String(host.id), role: "host" }],
+      custom: { title },
+    },
+  });
+  return { callType: "livestream", callId: liveCallId(streamId) };
+}
+
+export async function setLiveCohost(streamId, profile, isCohost) {
+  const c = getClient();
+  if (!c) return;
+  await c.upsertUsers([streamUser(profile)]);
+  const call = c.video.call("livestream", liveCallId(streamId));
+  await call.updateCallMembers({
+    update_members: [{ user_id: String(profile.id), role: isCohost ? "host" : "user" }],
+  });
+}
+
+export async function endLiveCall(streamId) {
+  const c = getClient();
+  if (!c) return;
+  const call = c.video.call("livestream", liveCallId(streamId));
+  await call.end();
+}
+
+// Viewer counts for the Live list: { [streamId]: count }. Cached briefly
+// because every open Live page polls it.
+let liveCountCache = { key: "", at: 0, value: {} };
+
+export async function liveViewerCounts(streamIds) {
+  const c = getClient();
+  if (!c || !streamIds.length) return {};
+  const key = streamIds.join(",");
+  if (liveCountCache.key === key && Date.now() - liveCountCache.at < LIVE_CACHE_MS) {
+    return liveCountCache.value;
+  }
+  const out = {};
+  for (let i = 0; i < streamIds.length; i += 25) {
+    const ids = streamIds.slice(i, i + 25).map(liveCallId);
+    const res = await c.video.queryCalls({
+      filter_conditions: { type: "livestream", id: { $in: ids } },
+      limit: 25,
+    });
+    for (const { call } of res.calls) {
+      const users = new Set((call.session?.participants || []).map((p) => p.user.id));
+      out[call.id.replace(/^live-/, "")] = { viewers: users.size, isLive: !call.backstage };
+    }
+  }
+  liveCountCache = { key, at: Date.now(), value: out };
+  return out;
+}

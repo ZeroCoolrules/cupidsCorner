@@ -3,6 +3,8 @@ import { useAuth } from "./auth.jsx";
 import Login from "./pages/Login.jsx";
 import Discover from "./pages/Discover.jsx";
 import Rooms from "./pages/Rooms.jsx";
+import Live from "./pages/Live.jsx";
+import LiveRoom from "./pages/LiveRoom.jsx";
 import Matches from "./pages/Matches.jsx";
 import Likes from "./pages/Likes.jsx";
 import Chats from "./pages/Chats.jsx";
@@ -24,7 +26,7 @@ const legalRoutes = [
 
 function Shell({ children }) {
   const location = useLocation();
-  const hideNav = /^\/(chats\/[^/]+(\/call)?|u\/[^/]+|date\/[^/]+)$/.test(location.pathname);
+  const hideNav = /^\/(chats\/[^/]+(\/call)?|u\/[^/]+|date\/[^/]+|live\/[^/]+)$/.test(location.pathname);
   const { bonus, clearBonus } = useAuth();
   return (
     <div className="app">
@@ -33,6 +35,7 @@ function Shell({ children }) {
       {!hideNav && (
         <nav className="tabbar">
           <Tab to="/discover" icon="🔥" label="Discover" />
+          <Tab to="/live" icon="📡" label="Live" />
           <Tab to="/rooms" icon="🌐" label="Rooms" />
           <Tab to="/matches" icon="💞" label="Matches" />
           <Tab to="/chats" icon="💬" label="Chats" />
@@ -92,6 +95,8 @@ export default function App() {
       <Routes>
         <Route path="/discover" element={<Discover />} />
         <Route path="/rooms" element={<Rooms />} />
+        <Route path="/live" element={<Live />} />
+        <Route path="/live/:id" element={<LiveRoom />} />
         <Route path="/matches" element={<Matches />} />
         <Route path="/likes" element={<Likes />} />
         <Route path="/chats" element={<Chats />} />

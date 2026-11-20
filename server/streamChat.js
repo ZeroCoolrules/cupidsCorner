@@ -121,3 +121,39 @@ export async function sendGiftMessage(conversationId, senderId, gift) {
     gift,
   });
 }
+
+// ---------------------------------------------------------------------------
+// Live broadcasts (Go Live). Each broadcast gets a Stream "livestream" chat
+// channel: anyone signed in can watch and post without being a member, which
+// is what an audience chat needs.
+// ---------------------------------------------------------------------------
+
+function liveChannelId(streamId) {
+  return `live-${streamId}`;
+}
+
+export async function ensureLiveChannel(streamId, title) {
+  const c = getClient();
+  if (!c) return;
+  await ensureSystemUser(c);
+  const channel = c.channel("livestream", liveChannelId(streamId), {
+    created_by_id: SYSTEM_USER_ID,
+    name: title,
+  });
+  await channel.create();
+}
+
+export async function sendLiveSystemMessage(streamId, text, extra = {}) {
+  const c = getClient();
+  if (!c) return;
+  await ensureSystemUser(c);
+  const channel = c.channel("livestream", liveChannelId(streamId));
+  await channel.sendMessage({ text, user_id: SYSTEM_USER_ID, messageKind: "system", ...extra });
+}
+
+export async function freezeLiveChannel(streamId) {
+  const c = getClient();
+  if (!c) return;
+  const channel = c.channel("livestream", liveChannelId(streamId));
+  await channel.updatePartial({ set: { frozen: true } });
+}

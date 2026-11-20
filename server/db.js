@@ -181,6 +181,34 @@ export function initDb() {
       created_at   TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- Live broadcasts ("Go Live", from the Social Streaming Rooms / DatingPro
+    -- live module idea): one host, optional co-hosts, an audience that watches.
+    CREATE TABLE IF NOT EXISTS live_streams (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      host_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title        TEXT NOT NULL,
+      status       TEXT NOT NULL DEFAULT 'live' CHECK (status IN ('live','ended')),
+      gift_sparks  INTEGER NOT NULL DEFAULT 0,
+      started_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      ended_at     TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS live_cohosts (
+      stream_id  INTEGER NOT NULL REFERENCES live_streams(id) ON DELETE CASCADE,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      added_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (stream_id, user_id)
+    );
+
+    -- DatingPro bridge: which cupidsCorner user came from which pg_users row.
+    CREATE TABLE IF NOT EXISTS datingpro_links (
+      pg_user_id  INTEGER PRIMARY KEY,
+      user_id     INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+      pg_email    TEXT,
+      imported_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_live_status ON live_streams(status, id);
     CREATE INDEX IF NOT EXISTS idx_verifications_user ON verifications(user_id, id);
     CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, id);
     CREATE INDEX IF NOT EXISTS idx_members_user ON conversation_members(user_id);
