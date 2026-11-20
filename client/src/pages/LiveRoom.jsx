@@ -19,111 +19,6 @@ import { api } from "../api.js";
 import { useAuth } from "../auth.jsx";
 import Avatar from "../components/Avatar.jsx";
 
-// One live broadcast. The host and co-hosts publish (backstage first, then
-// "Start broadcast"); everyone else watches through LivestreamPlayer. Chat,
-// gifts and share sit beside the video.
-export default function LiveRoom() {
-  const { id } = useParams();
-  const nav = useNavigate();
-  const { user } = useAuth();
-  const video = useStreamVideoClient();
-  const chat = useStreamChatClient();
-  const [stream, setStream] = useState(null);
-  const [error, setError] = useState("");
-  const [showGifts, setShowGifts] = useState(false);
-  const [showShare, setShowShare] = useState(false);
-
-  const load = useCallback(async () => {
-    const { stream } = await api(`/live/${id}`);
-    setStream(stream);
-    return stream;
-  }, [id]);
-
-  // Poll so a viewer who gets invited to co-host switches to the stage, and
-  // everyone notices when the host ends the stream.
-  useEffect(() => {
-    load().catch((e) => setError(e.message));
-    const t = setInterval(() => load().catch(() => {}), 8000);
-    return () => clearInterval(t);
-  }, [load]);
-
-  if (error) {
-    return (
-      <div className="live-view">
-        <LiveHeader title="Live" onBack={() => nav("/live")} />
-        <div className="empty-state"><div className="big">📡</div><p>{error}</p></div>
-      </div>
-    );
-  }
-  if (!stream || video.loading) {
-    return <div className="live-view"><div className="screen center"><div className="pulse">📡</div></div></div>;
-  }
-
-  const onStage = stream.isHost || stream.isCohost;
-  const ended = stream.status === "ended";
-
-  return (
-    <div className="live-view">
-      <LiveHeader
-        title={stream.title}
-        sub={`${stream.host.displayName}${stream.cohosts.length ? ` + ${stream.cohosts.length} co-host${stream.cohosts.length > 1 ? "s" : ""}` : ""}`}
-        onBack={() => nav("/live")}
-        onShare={() => setShowShare(true)}
-      />
-
-      <div className="live-stage">
-        {ended ? (
-          <div className="empty-state"><div className="big">🌙</div><p>This stream has ended.</p></div>
-        ) : video.error ? (
-          <div className="empty-state"><div className="big">🎥</div><p>{video.error}</p></div>
-        ) : (
-          <StreamVideo client={video.client}>
-            <StreamTheme className="call-theme">
-              {onStage ? (
-                <Stage key={`stage-${stream.isHost}`} client={video.client} stream={stream} onChanged={load} />
-              ) : (
-                <LivestreamPlayer
-                  key="viewer"
-                  callType={stream.callType}
-                  callId={stream.callId}
-                  joinBehavior="live"
-                />
-              )}
-            </StreamTheme>
-          </StreamVideo>
-        )}
-      </div>
-
-      <LiveChat
-        chatClient={chat.client}
-        chatError={chat.error}
-        channel={stream.chatChannel}
-        frozen={ended}
-        me={user}
-        onGift={() => setShowGifts(true)}
-      />
-
-      {showGifts && !ended && (
-        <LiveGifts stream={stream} me={user} onClose={() => setShowGifts(false)} />
-      )}
-      {showShare && <ShareSheet stream={stream} onClose={() => setShowShare(false)} />}
-    </div>
-  );
-}
-
-function LiveHeader({ title, sub, onBack, onShare }) {
-  return (
-    <header className="chat-header live-header">
-      <button className="back" onClick={onBack}>‹</button>
-      <div className="chat-head-meta">
-        <div className="chat-title"><span className="live-dot" /> {title}</div>
-        {sub && <div className="muted small">{sub}</div>}
-      </div>
-      {onShare && <button className="ghost small-btn" onClick={onShare}>Share</button>}
-    </header>
-  );
-}
-
 // Host / co-host side: join the livestream call with camera and mic on.
 function Stage({ client, stream, onChanged }) {
   const [call, setCall] = useState(null);
@@ -192,8 +87,7 @@ function StageInner({ stream, onChanged }) {
     <div className="stage">
       <div className="stage-video">
         <PaginatedGridLayout />
-        <span className={`live-badge ${isLive ? "" : "backstage"}`}>{isLive ? "LIVE" : "BACKSTAGE"}</span>
-        <span className="live-viewers">👁 {audience.length}</span>
+        <span className={`live-badge big ${isLive ? "" : "backstage"}`}>● {isLive ? "LIVE" : "BACKSTAGE"}</span>
       </div>
       <div className="str-video__call-controls stage-controls">
         <ToggleAudioPublishingButton />
@@ -302,37 +196,245 @@ function StageInner({ stream, onChanged }) {
   );
 }
 
-function LiveChat({ chatClient, chatError, channel: ch, frozen, me, onGift }) {
+// One live broadcast, laid out like StreamHub: a header with live time and
+// viewers, the video as a rounded card over a blurred backdrop, and a side
+// panel with Chat and People tabs. The host and co-hosts publish (backstage
+// first, then "Start broadcast"); everyone else watches via LivestreamPlayer.
+export default function LiveRoom() {
+  const { id } = useParams();
+  const nav = useNavigate();
+  const { user } = useAuth();
+  const video = useStreamVideoClient();
+  const chat = useStreamChatClient();
+  const [stream, setStream] = useState(null);
+  const [error, setError] = useState("");
+  const [showGifts, setShowGifts] = useState(false);
+  const [showShare, setShowShare] = useState(false);
+  const [tab, setTab] = useState("chat");
+  const room = useLiveChannel(chat.client, stream?.chatChannel);
+  const now = useNow(1000);
+
+  const load = useCallback(async () => {
+    const { stream } = await api(`/live/${id}`);
+    setStream(stream);
+    return stream;
+  }, [id]);
+
+  // Poll so a viewer who gets invited to co-host switches to the stage, and
+  // everyone notices when the host ends the stream.
+  useEffect(() => {
+    load().catch((e) => setError(e.message));
+    const t = setInterval(() => load().catch(() => {}), 8000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  if (error) {
+    return (
+      <div className="live-view">
+        <header className="live-header">
+          <button className="back" onClick={() => nav("/live")}>←</button>
+          <div className="live-head-text"><div className="live-title">Live</div></div>
+        </header>
+        <div className="empty-state"><div className="big">📡</div><p>{error}</p></div>
+      </div>
+    );
+  }
+  if (!stream || video.loading) {
+    return <div className="live-view"><div className="screen center"><div className="pulse">📡</div></div></div>;
+  }
+
+  const onStage = stream.isHost || stream.isCohost;
+  const ended = stream.status === "ended";
+  const viewers = room.watcherCount ?? stream.viewers ?? 0;
+  const stage = [stream.host, ...stream.cohosts];
+  const endedAt = stream.endedAt ? Date.parse(String(stream.endedAt).replace(" ", "T") + "Z") : now;
+
+  return (
+    <div className="live-view">
+      <header className="live-header">
+        <button className="back" onClick={() => nav("/live")} title="Back">←</button>
+        <div className="live-head-text">
+          <div className="live-title">{stream.title}</div>
+          <div className="live-meta">
+            {ended ? <span>Ended</span> : <span className="live-on">● LIVE</span>}
+            <span>⏱ {clock(stream.startedAt, ended ? endedAt : now)}</span>
+            <span>👁 {viewers}</span>
+            <span className="tag violet">{stream.category}</span>
+          </div>
+        </div>
+        <button className="icon-btn" onClick={() => setShowShare(true)} title="Share">⤴</button>
+      </header>
+
+      <div className="live-body">
+        <div className="live-stage" style={{ "--thumb": stream.host.avatarColor }}>
+          <div className="live-backdrop" style={stream.host.photoUrl ? { backgroundImage: `url(${stream.host.photoUrl})` } : undefined} />
+          {ended ? (
+            <div className="empty-state"><div className="big">🌙</div><p>This stream has ended.</p></div>
+          ) : video.error ? (
+            <div className="video-card offline">
+              <span className="live-badge big">● LIVE</span>
+              <div className="empty-state"><div className="big">🎥</div><p>{video.error}</p></div>
+              <span className="host-tag">
+                <Avatar user={stream.host} size="xs" /> {stream.host.displayName} <span className="crown">♛</span>
+              </span>
+            </div>
+          ) : (
+            <div className="video-card">
+              <StreamVideo client={video.client}>
+                <StreamTheme className="call-theme">
+                  {onStage ? (
+                    <Stage key={`stage-${stream.isHost}`} client={video.client} stream={stream} onChanged={load} />
+                  ) : (
+                    <>
+                      <LivestreamPlayer
+                        key="viewer"
+                        callType={stream.callType}
+                        callId={stream.callId}
+                        joinBehavior="live"
+                        layoutProps={{ showLiveBadge: false, showParticipantCount: false, showDuration: false, showSpeakerName: false }}
+                      />
+                      <span className="live-badge big">● LIVE</span>
+                    </>
+                  )}
+                </StreamTheme>
+              </StreamVideo>
+              <span className="host-tag">
+                <Avatar user={stream.host} size="xs" /> {stream.host.displayName} <span className="crown">♛</span>
+              </span>
+            </div>
+          )}
+        </div>
+
+        <aside className="live-side">
+          <div className="side-tabs">
+            <button className={`side-tab ${tab === "chat" ? "on" : ""}`} onClick={() => setTab("chat")}>💬 Chat</button>
+            <button className={`side-tab ${tab === "people" ? "on" : ""}`} onClick={() => setTab("people")}>
+              👥 {stage.length + room.watchers.filter((w) => !stage.some((u) => String(u.id) === w.id)).length}
+            </button>
+          </div>
+          {tab === "chat" ? (
+            <LiveChat room={room} chatError={chat.error} frozen={ended} me={user} onGift={() => setShowGifts(true)} />
+          ) : (
+            <People stage={stream} watchers={room.watchers} />
+          )}
+        </aside>
+      </div>
+
+      {showGifts && !ended && (
+        <LiveGifts stream={stream} me={user} onClose={() => setShowGifts(false)} />
+      )}
+      {showShare && <ShareSheet stream={stream} onClose={() => setShowShare(false)} />}
+    </div>
+  );
+}
+
+function useNow(ms) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), ms);
+    return () => clearInterval(t);
+  }, [ms]);
+  return now;
+}
+
+function clock(startedAt, now) {
+  const t = Date.parse(String(startedAt).replace(" ", "T") + "Z");
+  const secs = Math.max(0, Math.floor((now - t) / 1000));
+  const h = Math.floor(secs / 3600);
+  const mm = String(Math.floor((secs % 3600) / 60)).padStart(2, "0");
+  const ss = String(secs % 60).padStart(2, "0");
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+// Watches the stream's chat channel: messages, who's watching, and send().
+function useLiveChannel(chatClient, ch) {
   const [messages, setMessages] = useState([]);
-  const [text, setText] = useState("");
+  const [watchers, setWatchers] = useState([]);
+  const [watcherCount, setWatcherCount] = useState(null);
   const channelRef = useRef(null);
-  const listRef = useRef(null);
+  const type = ch?.type;
+  const cid = ch?.id;
 
   useEffect(() => {
-    if (!chatClient) return;
-    const channel = chatClient.channel(ch.type, ch.id);
+    if (!chatClient || !type) return;
+    const channel = chatClient.channel(type, cid);
     channelRef.current = channel;
-    const sync = () => setMessages([...channel.state.messages].slice(-100));
-    channel.on("message.new", sync);
-    channel.watch().then(sync).catch(() => {});
+    const sync = () => {
+      setMessages([...channel.state.messages].slice(-150));
+      setWatchers(Object.values(channel.state.watchers || {}).map((u) => ({ id: String(u.id), name: u.name, ...userLook(u) })));
+      setWatcherCount(channel.state.watcher_count ?? null);
+    };
+    const events = ["message.new", "user.watching.start", "user.watching.stop"];
+    events.forEach((e) => channel.on(e, sync));
+    channel.watch({ watchers: { limit: 100 } }).then(sync).catch(() => {});
     return () => {
-      channel.off("message.new", sync);
+      events.forEach((e) => channel.off(e, sync));
       channel.stopWatching().catch(() => {});
       channelRef.current = null;
     };
-  }, [chatClient, ch.type, ch.id]);
+  }, [chatClient, type, cid]);
+
+  const send = useCallback(async (text) => {
+    if (!channelRef.current) throw new Error("Chat isn't connected yet.");
+    await channelRef.current.sendMessage({ text });
+  }, []);
+
+  return { ready: !!chatClient, messages, watchers, watcherCount, send };
+}
+
+// Users upserted from the server carry { custom: { emoji, color } }.
+function userLook(u) {
+  return { emoji: u?.custom?.emoji || u?.emoji || "🙂", color: u?.custom?.color || u?.color || "#8b5cf6" };
+}
+
+const NAME_COLORS = ["#60a5fa", "#a78bfa", "#f472b6", "#34d399", "#fbbf24", "#22d3ee"];
+function nameColor(id) {
+  let h = 0;
+  for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return NAME_COLORS[h % NAME_COLORS.length];
+}
+
+function People({ stage, watchers }) {
+  const onStage = [stage.host, ...stage.cohosts];
+  const stageIds = new Set(onStage.map((u) => String(u.id)));
+  const audience = watchers.filter((w) => !stageIds.has(w.id));
+  return (
+    <div className="people-list">
+      <div className="people-head muted small">On stage</div>
+      {onStage.map((u, i) => (
+        <div key={u.id} className="person">
+          <Avatar user={u} size="sm" />
+          <span>{u.displayName}</span>
+          <span className="muted small">{i === 0 ? "♛ Host" : "Co-host"}</span>
+        </div>
+      ))}
+      <div className="people-head muted small">Watching ({audience.length})</div>
+      {audience.length === 0 && <p className="muted small">No one else yet.</p>}
+      {audience.map((w) => (
+        <div key={w.id} className="person">
+          <span className="avatar sm" style={{ background: w.color }}>{w.emoji}</span>
+          <span>{w.name || "Viewer"}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function LiveChat({ room, chatError, frozen, me, onGift }) {
+  const [text, setText] = useState("");
+  const listRef = useRef(null);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-  }, [messages]);
+  }, [room.messages]);
 
   async function send(e) {
     e.preventDefault();
     const body = text.trim();
-    if (!body || !channelRef.current) return;
+    if (!body) return;
     setText("");
     try {
-      await channelRef.current.sendMessage({ text: body });
+      await room.send(body);
     } catch (err) {
       alert(err.message);
     }
@@ -342,30 +444,40 @@ function LiveChat({ chatClient, chatError, channel: ch, frozen, me, onGift }) {
     <div className="live-chat">
       <div className="live-chat-list" ref={listRef}>
         {chatError && <p className="muted small">Chat is offline: {chatError}</p>}
-        {messages.map((m) => (
-          <div key={m.id} className={`live-msg ${m.messageKind === "system" || m.messageKind === "gift" ? "system" : ""}`}>
-            {m.messageKind === "system" || m.messageKind === "gift" ? (
-              <span>{m.text}</span>
-            ) : (
-              <>
-                <b className={String(m.user?.id) === String(me.id) ? "me" : ""}>{m.user?.name || "Someone"}</b>{" "}
-                <span>{m.text}</span>
-              </>
-            )}
-          </div>
-        ))}
+        {room.messages.length === 0 && !chatError && <p className="muted small">Say hi 👋</p>}
+        {room.messages.map((m) => {
+          if (m.messageKind === "system" || m.messageKind === "gift") {
+            return <div key={m.id} className="live-msg system">{m.text}</div>;
+          }
+          const look = userLook(m.user);
+          const mine = String(m.user?.id) === String(me.id);
+          return (
+            <div key={m.id} className="live-msg">
+              <span className="avatar sm" style={{ background: look.color }}>{look.emoji}</span>
+              <div className="live-msg-body">
+                <div>
+                  <b style={{ color: mine ? "#fbbf24" : nameColor(m.user?.id) }}>{m.user?.name || "Someone"}</b>
+                  <span className="msg-time">
+                    {new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                </div>
+                <div className="msg-text">{m.text}</div>
+              </div>
+            </div>
+          );
+        })}
       </div>
       {!frozen && (
         <form className="live-chat-form" onSubmit={send}>
           <button type="button" className="gift-btn" onClick={onGift} title="Send a gift">🎁</button>
           <input
-            placeholder={chatClient ? "Say something nice…" : "Chat is connecting…"}
+            placeholder={room.ready ? "Say something nice…" : "Chat is connecting…"}
             value={text}
             maxLength={300}
-            disabled={!chatClient}
+            disabled={!room.ready}
             onChange={(e) => setText(e.target.value)}
           />
-          <button type="submit" className="primary small-btn" disabled={!text.trim() || !chatClient}>Send</button>
+          <button type="submit" className="primary small-btn" disabled={!text.trim() || !room.ready}>Send</button>
         </form>
       )}
     </div>
@@ -442,7 +554,7 @@ function LiveGifts({ stream, me, onClose }) {
   );
 }
 
-function ShareSheet({ stream, onClose }) {
+export function ShareSheet({ stream, onClose }) {
   const url = `${window.location.origin}/live/${stream.id}`;
   const text = `${stream.host.displayName} is live on Cupid's Corner: ${stream.title}`;
   const enc = encodeURIComponent;

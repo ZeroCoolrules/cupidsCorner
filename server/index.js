@@ -1554,11 +1554,15 @@ app.post("/api/rooms/:id/moderate", auth, async (req, res) => {
 // ---------------------------------------------------------------------------
 
 const MAX_LIVE_COHOSTS = 3;
+export const LIVE_CATEGORIES = [
+  "Dating", "Music", "Gaming", "Cooking", "Fitness", "Art", "Technology",
+  "Comedy", "Dance", "Talk Show", "Education", "Social",
+];
 const liveQ = {
   active: db.prepare("SELECT * FROM live_streams WHERE status='live' ORDER BY id DESC LIMIT 50"),
   byId: db.prepare("SELECT * FROM live_streams WHERE id=?"),
   liveByHost: db.prepare("SELECT * FROM live_streams WHERE host_id=? AND status='live'"),
-  insert: db.prepare("INSERT INTO live_streams (host_id, title) VALUES (?, ?)"),
+  insert: db.prepare("INSERT INTO live_streams (host_id, title, category) VALUES (?, ?, ?)"),
   end: db.prepare("UPDATE live_streams SET status='ended', ended_at=datetime('now') WHERE id=? AND status='live'"),
   addGiftSparks: db.prepare("UPDATE live_streams SET gift_sparks = gift_sparks + ? WHERE id=?"),
   cohosts: db.prepare("SELECT user_id FROM live_cohosts WHERE stream_id=? ORDER BY added_at"),
@@ -1572,6 +1576,7 @@ function liveView(row, viewerId, counts = {}) {
   return {
     id: row.id,
     title: row.title,
+    category: row.category,
     status: row.status,
     startedAt: row.started_at,
     endedAt: row.ended_at,
@@ -1604,7 +1609,7 @@ app.get("/api/live", auth, async (req, res) => {
   }
   const streams = rows.map((r) => liveView(r, req.userId, counts));
   streams.sort((a, b) => (b.viewers ?? 0) - (a.viewers ?? 0));
-  res.json({ streams, videoConfigured: isStreamConfigured() });
+  res.json({ streams, categories: LIVE_CATEGORIES, videoConfigured: isStreamConfigured() });
 });
 
 app.post("/api/live", auth, async (req, res) => {
@@ -1622,7 +1627,8 @@ app.post("/api/live", auth, async (req, res) => {
     await safeStream(() => endLiveCall(old.id));
   }
 
-  const id = Number(liveQ.insert.run(req.userId, title).lastInsertRowid);
+  const category = LIVE_CATEGORIES.includes(req.body?.category) ? req.body.category : "Social";
+  const id = Number(liveQ.insert.run(req.userId, title, category).lastInsertRowid);
   try {
     await createLiveCall(id, publicUser(req.userId), title);
     await ensureLiveChannel(id, title);

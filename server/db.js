@@ -243,6 +243,7 @@ function migrate() {
   addColumn("users", "terms_accepted_at", "terms_accepted_at TEXT");
   addColumn("reports", "resolved_at", "resolved_at TEXT");
   addColumn("reports", "resolution", "resolution TEXT");
+  addColumn("live_streams", "category", "category TEXT NOT NULL DEFAULT 'Social'");
 }
 
 // helper: order a pair deterministically for the matches table
