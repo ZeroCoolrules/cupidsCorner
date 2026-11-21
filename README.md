@@ -30,6 +30,32 @@ Cupid's Corner is now the single home for the dating projects. It already had th
 - Sign-up and profile edits require age 18+.
 - Verification selfies are stored outside `/uploads`, only admins (`ADMIN_USERNAMES`) can view them, and they are deleted after review.
 
+## Go Live (broadcasts)
+
+The 📡 Live tab, built from the Social Streaming Rooms idea and DatingPro's live module, runs on the Stream keys the app already uses:
+
+- **Backstage first.** The host's camera comes on privately. Viewers see nothing until the host taps **Start broadcast**. The host can pause and resume.
+- **Co-hosts.** The host can invite up to 3 viewers on camera, and can remove them. A co-host can also leave the stage.
+- **Live chat** runs beside the video. Viewers can chat without joining anything.
+- **Gifts.** Sparks gifts go to the host or a co-host and show up in the chat. The stream keeps a running total.
+- **Share.** The share sheet offers the phone's share menu, plus X, Facebook, WhatsApp, Telegram and copy link.
+- Each host can run one stream at a time. Starting a new one ends the old one. When the host ends a stream, its chat is frozen.
+
+## DatingPro bridge
+
+This brings members of a PG Dating Pro site (the `pg_*` tables, e.g. Cupid's Point) into cupidsCorner. They sign in with their **DatingPro email (or nickname) and their existing password**. Dating Pro stores bcrypt hashes, and the import copies them as they are.
+
+```bash
+# from a phpMyAdmin / mysqldump export
+npm run import:datingpro -- --sql path/to/dump.sql --dry-run
+npm run import:datingpro -- --sql path/to/dump.sql
+
+# or straight from the live DatingPro database (npm install --workspace server mysql2 first)
+DATINGPRO_DATABASE_URL=mysql://user:pass@host/dbname npm run import:datingpro
+```
+
+The import skips bots, unapproved members and anyone under 18. It is safe to re-run, because `datingpro_links` tracks who has already been imported. Photos are not copied yet.
+
 ## Stack
 
 - **Backend** — Node + Express, SQLite via the built-in `node:sqlite` module (no native build step). Token sessions, bcrypt password hashing.

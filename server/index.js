@@ -14,6 +14,10 @@ import {
   getOrCreateRoomCall,
   liveRoomStatus,
   moderateRoomCall,
+  createLiveCall,
+  setLiveCohost,
+  endLiveCall,
+  liveViewerCounts,
 } from "./stream.js";
 import {
   syncChannel,
@@ -22,6 +26,9 @@ import {
   sendSystemMessage,
   sendGiftMessage,
   setChannelFrozen,
+  ensureLiveChannel,
+  sendLiveSystemMessage,
+  freezeLiveChannel,
 } from "./streamChat.js";
 import { GIFT_CATALOG, GIFT_BY_KEY } from "./gifts.js";
 import {
@@ -224,6 +231,9 @@ function typingNamesFor(conversationId, excludeUserId) {
 
 const q = {
   userByName: db.prepare("SELECT * FROM users WHERE username = ?"),
+  userByDatingProEmail: db.prepare(
+    "SELECT u.* FROM users u JOIN datingpro_links d ON d.user_id = u.id WHERE d.pg_email = ?"
+  ),
   userById: db.prepare("SELECT * FROM users WHERE id = ?"),
   insertUser: db.prepare(
     "INSERT INTO users (username, password_hash) VALUES (?, ?)"
@@ -604,7 +614,12 @@ app.post("/api/auth/signup", authLimiter, (req, res) => {
 
 app.post("/api/auth/login", authLimiter, (req, res) => {
   const { username, password } = req.body || {};
-  const user = username && q.userByName.get(String(username).trim());
+  const login = String(username || "").trim();
+  // Members imported from DatingPro can sign in with their DatingPro email.
+  const user =
+    login &&
+    (q.userByName.get(login) ||
+      (login.includes("@") && q.userByDatingProEmail.get(login.toLowerCase())));
   if (!user || !bcrypt.compareSync(String(password || ""), user.password_hash)) {
     return res.status(401).json({ error: "Wrong username or password" });
   }
@@ -1530,6 +1545,180 @@ app.post("/api/rooms/:id/moderate", auth, async (req, res) => {
     }
   }
   res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Go Live — broadcast to an audience, invite co-hosts, take gifts, share.
+// Brings the "Social Streaming Rooms" idea (and DatingPro's live module) into
+// cupidsCorner on the Stream stack the app already uses.
+// ---------------------------------------------------------------------------
+
+const MAX_LIVE_COHOSTS = 3;
+export const LIVE_CATEGORIES = [
+  "Dating", "Music", "Gaming", "Cooking", "Fitness", "Art", "Technology",
+  "Comedy", "Dance", "Talk Show", "Education", "Social",
+];
+const liveQ = {
+  active: db.prepare("SELECT * FROM live_streams WHERE status='live' ORDER BY id DESC LIMIT 50"),
+  byId: db.prepare("SELECT * FROM live_streams WHERE id=?"),
+  liveByHost: db.prepare("SELECT * FROM live_streams WHERE host_id=? AND status='live'"),
+  insert: db.prepare("INSERT INTO live_streams (host_id, title, category) VALUES (?, ?, ?)"),
+  end: db.prepare("UPDATE live_streams SET status='ended', ended_at=datetime('now') WHERE id=? AND status='live'"),
+  addGiftSparks: db.prepare("UPDATE live_streams SET gift_sparks = gift_sparks + ? WHERE id=?"),
+  cohosts: db.prepare("SELECT user_id FROM live_cohosts WHERE stream_id=? ORDER BY added_at"),
+  addCohost: db.prepare("INSERT OR IGNORE INTO live_cohosts (stream_id, user_id) VALUES (?, ?)"),
+  removeCohost: db.prepare("DELETE FROM live_cohosts WHERE stream_id=? AND user_id=?"),
+};
+
+function liveView(row, viewerId, counts = {}) {
+  const cohostIds = liveQ.cohosts.all(row.id).map((r) => r.user_id);
+  const c = counts[String(row.id)];
+  return {
+    id: row.id,
+    title: row.title,
+    category: row.category,
+    status: row.status,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    giftSparks: row.gift_sparks,
+    host: publicUser(row.host_id),
+    cohosts: cohostIds.map(publicUser).filter(Boolean),
+    viewers: c?.viewers ?? null,
+    onAir: c ? c.isLive : null,
+    isHost: row.host_id === viewerId,
+    isCohost: cohostIds.includes(viewerId),
+    callType: "livestream",
+    callId: `live-${row.id}`,
+    chatChannel: { type: "livestream", id: `live-${row.id}` },
+  };
+}
+
+function hostBlocksViewer(row, viewerId) {
+  return !!q.isBlocked.get(row.host_id, viewerId, viewerId, row.host_id);
+}
+
+app.get("/api/live", auth, async (req, res) => {
+  const rows = liveQ.active.all().filter((r) => !hostBlocksViewer(r, req.userId));
+  let counts = {};
+  if (isStreamConfigured()) {
+    try {
+      counts = await liveViewerCounts(rows.map((r) => r.id));
+    } catch (err) {
+      console.warn("[stream] live viewer counts failed:", err.message);
+    }
+  }
+  const streams = rows.map((r) => liveView(r, req.userId, counts));
+  streams.sort((a, b) => (b.viewers ?? 0) - (a.viewers ?? 0));
+  res.json({ streams, categories: LIVE_CATEGORIES, videoConfigured: isStreamConfigured() });
+});
+
+app.post("/api/live", auth, async (req, res) => {
+  if (!isStreamConfigured()) {
+    return res.status(503).json({
+      error: "Going live needs video. Add STREAM_API_KEY and STREAM_API_SECRET (free at https://dashboard.getstream.io).",
+    });
+  }
+  const title = String(req.body?.title || "").trim().slice(0, 80);
+  if (!title) return res.status(400).json({ error: "give your stream a title" });
+
+  // One broadcast per host: starting a new one ends the old one.
+  for (const old of [liveQ.liveByHost.get(req.userId)].filter(Boolean)) {
+    liveQ.end.run(old.id);
+    await safeStream(() => endLiveCall(old.id));
+  }
+
+  const category = LIVE_CATEGORIES.includes(req.body?.category) ? req.body.category : "Social";
+  const id = Number(liveQ.insert.run(req.userId, title, category).lastInsertRowid);
+  try {
+    await createLiveCall(id, publicUser(req.userId), title);
+    await ensureLiveChannel(id, title);
+  } catch (err) {
+    liveQ.end.run(id);
+    return res.status(502).json({ error: `Couldn't start the stream: ${err.message}` });
+  }
+  res.json({ stream: liveView(liveQ.byId.get(id), req.userId) });
+});
+
+app.get("/api/live/:id", auth, (req, res) => {
+  const row = liveQ.byId.get(Number(req.params.id));
+  if (!row || hostBlocksViewer(row, req.userId)) return res.status(404).json({ error: "That stream isn't available." });
+  res.json({ stream: liveView(row, req.userId) });
+});
+
+app.post("/api/live/:id/cohosts", auth, async (req, res) => {
+  const row = liveQ.byId.get(Number(req.params.id));
+  if (!row || row.status !== "live") return res.status(404).json({ error: "That stream has ended." });
+  if (row.host_id !== req.userId) return res.status(403).json({ error: "only the host can invite co-hosts" });
+  const targetId = Number(req.body?.userId);
+  const target = targetId && targetId !== req.userId ? publicUser(targetId) : null;
+  if (!target || hostBlocksViewer(row, targetId)) return res.status(400).json({ error: "pick someone else" });
+  if (liveQ.cohosts.all(row.id).length >= MAX_LIVE_COHOSTS) {
+    return res.status(400).json({ error: `Up to ${MAX_LIVE_COHOSTS} co-hosts per stream.` });
+  }
+  try {
+    await setLiveCohost(row.id, target, true);
+  } catch (err) {
+    return res.status(502).json({ error: err.message });
+  }
+  liveQ.addCohost.run(row.id, targetId);
+  await safeStream(() => sendLiveSystemMessage(row.id, `${target.displayName} is now co-hosting.`));
+  res.json({ stream: liveView(liveQ.byId.get(row.id), req.userId) });
+});
+
+// The host removes a co-host, or a co-host steps down themselves.
+app.delete("/api/live/:id/cohosts/:userId", auth, async (req, res) => {
+  const row = liveQ.byId.get(Number(req.params.id));
+  if (!row) return res.status(404).json({ error: "no such stream" });
+  const targetId = Number(req.params.userId);
+  if (row.host_id !== req.userId && targetId !== req.userId) {
+    return res.status(403).json({ error: "only the host can do that" });
+  }
+  liveQ.removeCohost.run(row.id, targetId);
+  const target = publicUser(targetId);
+  if (target && row.status === "live") {
+    await safeStream(() => setLiveCohost(row.id, target, false));
+  }
+  res.json({ stream: liveView(liveQ.byId.get(row.id), req.userId) });
+});
+
+app.post("/api/live/:id/end", auth, async (req, res) => {
+  const row = liveQ.byId.get(Number(req.params.id));
+  if (!row) return res.status(404).json({ error: "no such stream" });
+  if (row.host_id !== req.userId) return res.status(403).json({ error: "only the host can end the stream" });
+  liveQ.end.run(row.id);
+  await safeStream(() => sendLiveSystemMessage(row.id, "The stream has ended. Thanks for watching!"));
+  await safeStream(() => endLiveCall(row.id));
+  await safeStream(() => freezeLiveChannel(row.id));
+  res.json({ stream: liveView(liveQ.byId.get(row.id), req.userId) });
+});
+
+// Gifts on a live stream go to the host or one of the co-hosts. Same sparks
+// rules as gifts in chat: the sender spends, nothing is minted.
+app.post("/api/live/:id/gift", auth, async (req, res) => {
+  const row = liveQ.byId.get(Number(req.params.id));
+  if (!row || row.status !== "live") return res.status(404).json({ error: "That stream has ended." });
+  const gift = GIFT_BY_KEY[String(req.body?.giftKey || "")];
+  if (!gift) return res.status(400).json({ error: "unknown gift" });
+  const recipientId = Number(req.body?.recipientId) || row.host_id;
+  const onStage = [row.host_id, ...liveQ.cohosts.all(row.id).map((r) => r.user_id)];
+  if (!onStage.includes(recipientId)) return res.status(400).json({ error: "gifts go to the host or a co-host" });
+  if (recipientId === req.userId) return res.status(400).json({ error: "you can't gift yourself" });
+  if (q.isBlocked.get(req.userId, recipientId, recipientId, req.userId)) {
+    return res.status(403).json({ error: "unavailable" });
+  }
+  const me = q.profileById.get(req.userId);
+  if (me.sparks < gift.cost) {
+    return res.status(400).json({ error: `Not enough sparks — ${gift.name} costs ${gift.cost}.` });
+  }
+  q.addSparks.run(-gift.cost, req.userId);
+  q.insertGift.run(req.userId, recipientId, gift.key, null);
+  liveQ.addGiftSparks.run(gift.cost, row.id);
+  const from = publicUser(req.userId).displayName;
+  const to = publicUser(recipientId).displayName;
+  await safeStream(() =>
+    sendLiveSystemMessage(row.id, `${from} sent ${gift.emoji} ${gift.name} to ${to}`, { messageKind: "gift", gift })
+  );
+  res.json({ ok: true, sparks: q.profileById.get(req.userId).sparks, gift });
 });
 
 // ---------------------------------------------------------------------------

@@ -116,7 +116,7 @@ export default function Login() {
         </div>
 
         <label>
-          Username
+          {mode === "login" ? "Username or DatingPro email" : "Username"}
           <input value={form.username} onChange={set("username")} autoCapitalize="none" required />
         </label>
         <label>

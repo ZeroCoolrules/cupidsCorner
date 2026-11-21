@@ -16,7 +16,8 @@
     "dev:client": "npm --workspace client run dev",
     "build": "npm --workspace client run build",
     "start": "npm --workspace server run start",
-    "seed": "npm --workspace server run seed"
+    "seed": "npm --workspace server run seed",
+    "import:datingpro": "npm --workspace server run import:datingpro --"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"
