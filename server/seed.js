@@ -9,7 +9,7 @@ if (process.env.NODE_ENV === "production" && !process.argv.includes("--force")) 
   process.exit(1);
 }
 
-initDb();
+await initDb();
 
 const DEMO_PASSWORD = "password123";
 
@@ -55,11 +55,11 @@ const hash = bcrypt.hashSync(DEMO_PASSWORD, 10);
 const ids = {};
 
 for (const p of people) {
-  let row = findUser.get(p.u);
+  let row = await findUser.get(p.u);
   if (!row) {
-    const info = insertUser.run(p.u, hash);
+    const info = await insertUser.run(p.u, hash);
     const id = Number(info.lastInsertRowid);
-    insertProfile.run({
+    await insertProfile.run({
       user_id: id,
       display_name: p.n,
       age: p.age,
@@ -71,23 +71,23 @@ for (const p of people) {
       avatar_color: p.c,
       interests: JSON.stringify(p.i),
     });
-    const conv = insertConv.run("ai", "Cupid", null);
+    const conv = await insertConv.run("ai", "Cupid", null);
     const cid = Number(conv.lastInsertRowid);
-    insertMember.run(cid, id);
-    insertMessage.run(cid, null, "ai", CUPID_WELCOME);
-    row = findUser.get(p.u);
+    await insertMember.run(cid, id);
+    await insertMessage.run(cid, null, "ai", CUPID_WELCOME);
+    row = await findUser.get(p.u);
     console.log("created", p.u);
   }
   ids[p.u] = row.id;
 }
 
 // a couple of pre-baked matches + a group so the app looks alive
-function matchAndDm(u1, u2, greeting) {
+async function matchAndDm(u1, u2, greeting) {
   const [a, b] = ids[u1] < ids[u2] ? [ids[u1], ids[u2]] : [ids[u2], ids[u1]];
-  insertSwipe.run(ids[u1], ids[u2]);
-  insertSwipe.run(ids[u2], ids[u1]);
-  insertMatch.run(a, b);
-  const existing = db
+  await insertSwipe.run(ids[u1], ids[u2]);
+  await insertSwipe.run(ids[u2], ids[u1]);
+  await insertMatch.run(a, b);
+  const existing = await db
     .prepare(
       `SELECT c.id FROM conversations c
        JOIN conversation_members x ON x.conversation_id = c.id AND x.user_id = ?
@@ -96,27 +96,27 @@ function matchAndDm(u1, u2, greeting) {
     )
     .get(a, b);
   if (existing) return;
-  const conv = insertConv.run("dm", "", ids[u1]);
+  const conv = await insertConv.run("dm", "", ids[u1]);
   const cid = Number(conv.lastInsertRowid);
-  insertMember.run(cid, a);
-  insertMember.run(cid, b);
-  insertMessage.run(cid, null, "system", "You matched! Say hello 👋");
-  if (greeting) insertMessage.run(cid, ids[u1], "text", greeting);
+  await insertMember.run(cid, a);
+  await insertMember.run(cid, b);
+  await insertMessage.run(cid, null, "system", "You matched! Say hello 👋");
+  if (greeting) await insertMessage.run(cid, ids[u1], "text", greeting);
 }
 
-matchAndDm("ava", "leo", "ok your band name — defend it over coffee?");
-matchAndDm("mira", "noah", "trivia night thursday, you in?");
+await matchAndDm("ava", "leo", "ok your band name — defend it over coffee?");
+await matchAndDm("mira", "noah", "trivia night thursday, you in?");
 
-const groupExists = db
+const groupExists = await db
   .prepare("SELECT id FROM conversations WHERE type='group' AND title = ?")
   .get("Trivia Team");
 if (!groupExists) {
-  const conv = insertConv.run("group", "Trivia Team", ids["mira"]);
+  const conv = await insertConv.run("group", "Trivia Team", ids["mira"]);
   const cid = Number(conv.lastInsertRowid);
-  for (const u of ["mira", "noah", "theo"]) insertMember.run(cid, ids[u]);
-  insertMessage.run(cid, null, "system", "Mira started the group.");
-  insertMessage.run(cid, ids["mira"], "text", "Category draft: I call history.");
-  insertMessage.run(cid, ids["theo"], "text", "Dibs on music. Obviously.");
+  for (const u of ["mira", "noah", "theo"]) await insertMember.run(cid, ids[u]);
+  await insertMessage.run(cid, null, "system", "Mira started the group.");
+  await insertMessage.run(cid, ids["mira"], "text", "Category draft: I call history.");
+  await insertMessage.run(cid, ids["theo"], "text", "Dibs on music. Obviously.");
 }
 
 // public webcam rooms — anyone can browse + join, no match required
@@ -126,12 +126,12 @@ const rooms = [
   { title: "Late Night Talk", topic: "Whoever's up, come chat.", emoji: "🌙", color: "#7d5fff", host: "diego", members: ["diego", "yuki", "cleo"] },
 ];
 for (const r of rooms) {
-  const existing = db.prepare("SELECT id FROM conversations WHERE type='room' AND title=?").get(r.title);
+  const existing = await db.prepare("SELECT id FROM conversations WHERE type='room' AND title=?").get(r.title);
   if (existing) continue;
-  const conv = insertRoom.run(r.title, r.topic, r.emoji, r.color, ids[r.host]);
+  const conv = await insertRoom.run(r.title, r.topic, r.emoji, r.color, ids[r.host]);
   const cid = Number(conv.lastInsertRowid);
-  for (const u of r.members) insertMember.run(cid, ids[u]);
-  insertMessage.run(cid, null, "system", `${people.find((p) => p.u === r.host).n} opened the room.`);
+  for (const u of r.members) await insertMember.run(cid, ids[u]);
+  await insertMessage.run(cid, null, "system", `${people.find((p) => p.u === r.host).n} opened the room.`);
   console.log("created room", r.title);
 }
 
@@ -140,13 +140,13 @@ const ratings = [
   ["leo", "ava", 5], ["priya", "ava", 4], ["noah", "mira", 5],
   ["theo", "mira", 5], ["ava", "leo", 4], ["cleo", "diego", 5],
 ];
-for (const [from, to, stars] of ratings) upsertRating.run(ids[from], ids[to], stars);
+for (const [from, to, stars] of ratings) await upsertRating.run(ids[from], ids[to], stars);
 
 const fanPairs = [
   ["leo", "ava"], ["priya", "ava"], ["noah", "ava"],
   ["theo", "mira"], ["sam", "mira"], ["cleo", "diego"], ["yuki", "diego"],
 ];
-for (const [from, to] of fanPairs) addFan.run(ids[from], ids[to]);
+for (const [from, to] of fanPairs) await addFan.run(ids[from], ids[to]);
 
 // a couple of demo gifts (also debits the sender's starting sparks balance)
 const demoGifts = [
@@ -155,9 +155,10 @@ const demoGifts = [
   ["theo", "mira", "bouquet"],
 ];
 for (const [from, to, key] of demoGifts) {
-  insertGift.run(ids[from], ids[to], key, null);
-  spendSparks.run(GIFT_BY_KEY[key].cost, ids[from]);
+  await insertGift.run(ids[from], ids[to], key, null);
+  await spendSparks.run(GIFT_BY_KEY[key].cost, ids[from]);
 }
 
 console.log("\nSeed complete. Demo logins (password: %s):", DEMO_PASSWORD);
 console.log(people.map((p) => "  " + p.u).join("\n"));
+await db.close();

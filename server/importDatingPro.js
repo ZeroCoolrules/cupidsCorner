@@ -19,9 +19,9 @@ if (!sqlFile && !mysqlUrl) {
   process.exit(1);
 }
 
-initDb();
+await initDb();
 const rows = sqlFile ? rowsFromSqlFile(sqlFile) : await rowsFromMysql(mysqlUrl);
-const report = importDatingProUsers(db, rows, { dryRun });
+const report = await importDatingProUsers(db, rows, { dryRun });
 
 console.log(`${dryRun ? "[dry run] would import" : "Imported"} ${report.imported.length} of ${rows.length} DatingPro members.`);
 if (report.alreadyLinked) console.log(`${report.alreadyLinked} were already imported earlier.`);
@@ -29,3 +29,4 @@ if (report.needPasswordReset) console.log(`${report.needPasswordReset} had no bc
 const reasons = {};
 for (const s of report.skipped) reasons[s.reason] = (reasons[s.reason] || 0) + 1;
 for (const [r, n] of Object.entries(reasons)) console.log(`Skipped ${n}: ${r}`);
+await db.close();

@@ -56,6 +56,41 @@ DATINGPRO_DATABASE_URL=mysql://user:pass@host/dbname npm run import:datingpro
 
 The import skips bots, unapproved members and anyone under 18. It is safe to re-run, because `datingpro_links` tracks who has already been imported. Photos are not copied yet.
 
+## Brands (white-label sites)
+
+One backend serves several branded sites. Members are one shared pool: a
+brand sets the look and records where someone signed up, never who they can
+see or match.
+
+- A request is matched to a brand by the `X-Brand: <slug>` header (sent by a
+  separate front end) or by the domain it arrives on; anything else is the
+  default brand, `cupidscorner`. Existing members belong to it.
+- `/api/v1/...` is the same API as `/api/...`; outside sites should call v1.
+  Auth is the usual `Authorization: Bearer <token>` from signup/login.
+- `GET /api/v1/public/brand` returns the matched brand's name, logo and colors.
+- Admins manage brands with `GET/POST /api/v1/admin/brands` and
+  `PUT /api/v1/admin/brands/:slug` (`slug`, `name`, `domain`, `logoUrl`,
+  `primaryColor`, `accentColor`, `supportEmail`, `active`).
+- A brand's domain (and `www.` of it) is allowed for CORS automatically.
+
+## Database: SQLite or Postgres
+
+The server runs on SQLite by default (`DB_PATH`). Set `DATABASE_URL` to a
+Postgres connection string (a Supabase project works) and it runs on Postgres
+instead, which is what several branded sites should share. The same queries
+run on both; `server/db.js` translates them.
+
+Switching a live site over, once:
+
+1. Create the Postgres database (Supabase: New project, then Connect,
+   then copy the "Session pooler" connection string).
+2. In the Render shell: `cd server && DATABASE_URL='<that string>' npm run copy:sqlite-to-postgres`.
+   It copies every member, chat, match and gift from the SQLite file into
+   the empty Postgres database in one transaction. Photos stay on the disk.
+3. Add `DATABASE_URL` in Render's Environment and redeploy.
+
+To undo, remove `DATABASE_URL` and redeploy: the SQLite file is untouched.
+
 ## Stack
 
 - **Backend** — Node + Express, SQLite via the built-in `node:sqlite` module (no native build step). Token sessions, bcrypt password hashing.
