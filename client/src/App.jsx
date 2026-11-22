@@ -14,6 +14,7 @@ import CallRoom from "./pages/CallRoom.jsx";
 import Profile from "./pages/Profile.jsx";
 import UserProfile from "./pages/UserProfile.jsx";
 import Sparks from "./pages/Sparks.jsx";
+import Coach from "./pages/Coach.jsx";
 import VirtualDate from "./pages/VirtualDate.jsx";
 import AdminVerifications from "./pages/AdminVerifications.jsx";
 import AdminReports from "./pages/AdminReports.jsx";
@@ -69,6 +70,7 @@ function TopNav() {
         <NavLink to="/rooms" className={link}>🌐 Rooms</NavLink>
         <NavLink to="/matches" className={link}>💞 Matches</NavLink>
         <NavLink to="/chats" className={link}>💬 Chats</NavLink>
+        <NavLink to="/coach" className={link}>📞 Coach</NavLink>
       </nav>
       <div className="topnav-right">
         <NavLink to="/sparks" className="sparks-pill">✨ {user?.sparks ?? 0}</NavLink>
@@ -140,6 +142,7 @@ export default function App() {
         <Route path="/profile" element={<Profile />} />
         <Route path="/u/:id" element={<UserProfile />} />
         <Route path="/sparks" element={<Sparks />} />
+        <Route path="/coach" element={<Coach />} />
         <Route path="/date/:userId" element={<VirtualDate />} />
         <Route path="/admin/verifications" element={<AdminVerifications />} />
         <Route path="/admin/reports" element={<AdminReports />} />

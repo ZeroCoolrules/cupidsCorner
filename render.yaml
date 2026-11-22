@@ -56,6 +56,17 @@ services:
         sync: false
       - key: CUPID_LLM_MODEL
         sync: false
+      # Paid voice sessions with Cupid (see server/coach.js). Off until
+      # COACH_PHONE_NUMBER is set. The number is only ever shown to members
+      # who have paid; COACH_AGENT_SECRET lets the voice agent check codes.
+      - key: COACH_PHONE_NUMBER
+        sync: false
+      - key: COACH_AGENT_SECRET
+        sync: false
+      - key: COACH_SESSION_SPARKS
+        value: 1200
+      - key: COACH_SESSION_MINUTES
+        value: 20
       # x402 paid endpoint (POST /match/compatibility). Disabled until
       # X402_PAY_TO is set. CDP keys are required for Bazaar listing.
       - key: X402_PAY_TO

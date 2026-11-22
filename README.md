@@ -73,6 +73,28 @@ see or match.
   `primaryColor`, `accentColor`, `supportEmail`, `active`).
 - A brand's domain (and `www.` of it) is allowed for CORS automatically.
 
+## Coach sessions (paid voice calls with Cupid)
+
+Cupid also takes phone calls. A member pays sparks for one session, and only then sees the coach line and a six-digit one-time code. The voice agent asks the caller for the code and checks it with this API before it starts, so the number is no use to anyone who hasn't paid.
+
+- The number is never in the code or the database. It is read from `COACH_PHONE_NUMBER` and returned only inside a paid session. Leave it unset and the feature is off.
+- `COACH_SESSION_SPARKS` (default 1200, about $10 of sparks) is the price, `COACH_SESSION_MINUTES` (default 20) the length, and `COACH_CODE_HOURS` (default 48) how long a paid code can wait for the call.
+- The clock starts the first time the agent accepts the code. Calling back with the same code during the session still works, so a dropped call doesn't cost a second session.
+- Paying twice in a row doesn't charge twice: a member with a session waiting gets that same session back.
+
+The voice agent sends `Authorization: Bearer <COACH_AGENT_SECRET>`:
+
+```
+POST /api/v1/coach/agent/verify   { "code": "123456" }
+→ { "valid": true, "sessionId": 7, "resumed": false, "minutes": 20, "secondsLeft": 1200,
+    "endsAt": "…", "member": { "firstName": "…", "age": 30, "gender": "…", "lookingFor": "…", "city": "…", "bio": "…" } }
+→ { "valid": false }               wrong, used up or expired: ask again or end the call
+
+POST /api/v1/coach/agent/end      { "code": "123456" }   optional, closes the session when the call ends
+```
+
+Members use `GET /api/coach` (price, balance, and their session if they have paid) and `POST /api/coach/sessions` (pay). See `server/coach.js`.
+
 ## Database: SQLite or Postgres
 
 The server runs on SQLite by default (`DB_PATH`). Set `DATABASE_URL` to a
@@ -168,6 +190,7 @@ The app is a single Express process (API + the built React client on one port), 
    - `STREAM_API_KEY`, `STREAM_API_SECRET` — video + chat
    - `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` — buying sparks
    - `CUPID_LLM_URL`, `CUPID_LLM_KEY`, `CUPID_LLM_MODEL` — a real model for Cupid instead of the built-in heuristic
+   - `COACH_PHONE_NUMBER`, `COACH_AGENT_SECRET` — paid voice sessions with Cupid (see **Coach sessions**)
 4. Deploy. First boot creates an empty database automatically — run `npm run seed` locally against the same `DB_PATH` first, or just sign up fresh, once it's live.
 5. If you enabled Stripe, add the webhook endpoint in the [Stripe dashboard](https://dashboard.stripe.com/webhooks): `https://<your-app>.onrender.com/api/billing/webhook`, listening for `checkout.session.completed`. Copy the signing secret it gives you into `STRIPE_WEBHOOK_SECRET`.
 
@@ -226,6 +249,8 @@ git push -u origin main
 | POST | `/api/conversations/:id/messages` | **fallback-mode only** — send; Cupid auto-replies in `ai` threads |
 | POST | `/api/conversations/:id/typing` | **fallback-mode only** — ping "I'm typing" |
 | POST | `/api/conversations/:id/messages/:messageId/react` | **fallback-mode only** — toggle an emoji reaction |
+| GET | `/api/coach` | coach session price, your balance, and your paid session (number + code) if you have one |
+| POST | `/api/coach/sessions` | pay sparks for a coach session → number + one-time code |
 | GET | `/api/stream/credentials` | Stream API key + video/chat tokens for the client SDKs |
 | POST | `/api/conversations/:id/call` | get-or-create the Stream video room for a thread |
 

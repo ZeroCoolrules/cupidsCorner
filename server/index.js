@@ -62,6 +62,7 @@ import {
   updateBrand,
   DEFAULT_BRAND_SLUG,
 } from "./brands.js";
+import { initCoach, registerCoachRoutes } from "./coach.js";
 
 // Array helpers for async callbacks (DB calls are async).
 const mapAsync = (arr, fn) => Promise.all(arr.map(fn));
@@ -140,6 +141,7 @@ const reportLimiter = rateLimit({
 
 await initDb();
 await initBrands();
+await initCoach();
 
 const app = express();
 // Route handlers are async (the database is); pass their errors to the
@@ -1907,6 +1909,12 @@ app.post("/api/billing/checkout", auth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ---------------------------------------------------------------------------
+// paid voice sessions with Cupid, the AI coach (see coach.js)
+// ---------------------------------------------------------------------------
+
+registerCoachRoutes(app, { auth, q, rateLimit });
 
 // ---------------------------------------------------------------------------
 // paid API (x402): pay-per-call compatibility scoring
