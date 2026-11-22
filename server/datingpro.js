@@ -157,7 +157,22 @@ export function mapDatingProUser(row) {
 
 // ---- writing -------------------------------------------------------------
 
-export function importDatingProUsers(db, rows, { dryRun = false } = {}) {
+// Imports inside one transaction; a dry run rolls it back.
+export async function importDatingProUsers(conn, rows, { dryRun = false } = {}) {
+  const report = { imported: [], alreadyLinked: 0, skipped: [], needPasswordReset: 0 };
+  const DRY_RUN = Symbol("dry run");
+  try {
+    await conn.transaction(async (db) => {
+      await importRows(db, rows, report, dryRun);
+      if (dryRun) throw DRY_RUN;
+    });
+  } catch (err) {
+    if (err !== DRY_RUN) throw err;
+  }
+  return report;
+}
+
+async function importRows(db, rows, report, dryRun) {
   const linked = db.prepare("SELECT user_id FROM datingpro_links WHERE pg_user_id = ?");
   const nameTaken = db.prepare("SELECT 1 FROM users WHERE username = ?");
   const insertUser = db.prepare("INSERT INTO users (username, password_hash, terms_accepted_at) VALUES (?, ?, ?)");
@@ -166,42 +181,30 @@ export function importDatingProUsers(db, rows, { dryRun = false } = {}) {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   const insertLink = db.prepare("INSERT INTO datingpro_links (pg_user_id, user_id, pg_email) VALUES (?, ?, ?)");
 
-  const report = { imported: [], alreadyLinked: 0, skipped: [], needPasswordReset: 0 };
-  const run = () => {
-    for (const row of rows) {
-      const m = mapDatingProUser(row);
-      if (m.skip) {
-        report.skipped.push({ pgUserId: Number(row.id), reason: m.skip });
-        continue;
-      }
-      if (linked.get(m.pgUserId)) {
-        report.alreadyLinked++;
-        continue;
-      }
-      let username = m.baseUsername.length >= 3 ? m.baseUsername : `${m.baseUsername}_dp`;
-      for (let n = 2; nameTaken.get(username); n++) username = `${m.baseUsername.slice(0, 20)}${n}`;
-      if (!m.hasPassword) report.needPasswordReset++;
-      report.imported.push({ pgUserId: m.pgUserId, username });
-      if (dryRun) continue;
-      const userId = Number(
-        insertUser.run(username, m.passwordHash, m.acceptedTerms ? new Date().toISOString().slice(0, 19).replace("T", " ") : null)
-          .lastInsertRowid
-      );
-      insertProfile.run(
-        userId, m.displayName, m.age, m.gender, m.orientation, m.bio, m.avatarEmoji, m.avatarColor,
-        m.verified ? new Date().toISOString().slice(0, 19).replace("T", " ") : null
-      );
-      insertLink.run(m.pgUserId, userId, m.email);
-      // The Cupid AI chat is created on first sign-in (ensureAiConversation).
+  for (const row of rows) {
+    const m = mapDatingProUser(row);
+    if (m.skip) {
+      report.skipped.push({ pgUserId: Number(row.id), reason: m.skip });
+      continue;
     }
-  };
-  db.exec("BEGIN");
-  try {
-    run();
-    db.exec(dryRun ? "ROLLBACK" : "COMMIT");
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
+    if (await linked.get(m.pgUserId)) {
+      report.alreadyLinked++;
+      continue;
+    }
+    let username = m.baseUsername.length >= 3 ? m.baseUsername : `${m.baseUsername}_dp`;
+    for (let n = 2; await nameTaken.get(username); n++) username = `${m.baseUsername.slice(0, 20)}${n}`;
+    if (!m.hasPassword) report.needPasswordReset++;
+    report.imported.push({ pgUserId: m.pgUserId, username });
+    if (dryRun) continue;
+    const userId = Number(
+      (await insertUser.run(username, m.passwordHash, m.acceptedTerms ? new Date().toISOString().slice(0, 19).replace("T", " ") : null))
+        .lastInsertRowid
+    );
+    await insertProfile.run(
+      userId, m.displayName, m.age, m.gender, m.orientation, m.bio, m.avatarEmoji, m.avatarColor,
+      m.verified ? new Date().toISOString().slice(0, 19).replace("T", " ") : null
+    );
+    await insertLink.run(m.pgUserId, userId, m.email);
+    // The Cupid AI chat is created on first sign-in (ensureAiConversation).
   }
-  return report;
 }

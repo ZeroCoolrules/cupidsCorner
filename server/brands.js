@@ -17,8 +17,8 @@ const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 // Domain names only: no scheme, port, path or wildcards.
 const DOMAIN_RE = /^(?=.{3,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
-export function initBrands() {
-  db.exec(`
+export async function initBrands() {
+  await db.schema(`
     CREATE TABLE IF NOT EXISTS brands (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       slug          TEXT NOT NULL UNIQUE,
@@ -32,16 +32,15 @@ export function initBrands() {
       created_at    TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
-  db.prepare(
-    "INSERT OR IGNORE INTO brands (slug, name) VALUES (?, ?)"
+  await db.prepare(
+    "INSERT INTO brands (slug, name) VALUES (?, ?) ON CONFLICT (slug) DO NOTHING"
   ).run(DEFAULT_BRAND_SLUG, "Cupid's Corner");
 
   // Where each member signed up. Existing members belong to the default brand.
-  const cols = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
-  if (!cols.includes("brand_id")) {
-    db.exec("ALTER TABLE users ADD COLUMN brand_id INTEGER REFERENCES brands(id)");
+  if (!(await db.columns("users")).includes("brand_id")) {
+    await db.exec("ALTER TABLE users ADD COLUMN brand_id INTEGER REFERENCES brands(id)");
   }
-  db.prepare(
+  await db.prepare(
     "UPDATE users SET brand_id = (SELECT id FROM brands WHERE slug = ?) WHERE brand_id IS NULL"
   ).run(DEFAULT_BRAND_SLUG);
 }
@@ -58,30 +57,29 @@ export function listBrands() {
 }
 
 // Origins (https://domain) of active brands, for CORS.
-export function brandOrigins() {
-  return db
-    .prepare("SELECT domain FROM brands WHERE domain IS NOT NULL AND active = 1")
-    .all()
-    .flatMap((r) => [`https://${r.domain}`, `https://www.${r.domain}`]);
+export async function brandOrigins() {
+  return (await db.prepare("SELECT domain FROM brands WHERE domain IS NOT NULL AND active = 1").all()).flatMap((r) => [`https://${r.domain}`, `https://www.${r.domain}`]);
 }
 
-export function resolveBrand(req) {
+export async function resolveBrand(req) {
   const slug = String(req.get("x-brand") || "").trim().toLowerCase();
   if (slug) {
-    const b = bySlug().get(slug);
+    const b = await bySlug().get(slug);
     if (b) return b;
   }
   const host = String(req.hostname || "").toLowerCase().replace(/^www\./, "");
   if (host) {
-    const b = byDomain().get(host);
+    const b = await byDomain().get(host);
     if (b) return b;
   }
   return defaultBrand();
 }
 
 export function brandMiddleware(req, res, next) {
-  req.brand = resolveBrand(req);
-  next();
+  resolveBrand(req).then((b) => {
+    req.brand = b;
+    next();
+  }, next);
 }
 
 export function publicBrand(b) {
@@ -135,18 +133,18 @@ export function brandInput(body, { creating }) {
   return { values: v };
 }
 
-export function createBrand(values) {
+export async function createBrand(values) {
   const cols = Object.keys(values);
-  const info = db
+  const info = await db
     .prepare(`INSERT INTO brands (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`)
     .run(...cols.map((c) => values[c]));
   return db.prepare("SELECT * FROM brands WHERE id = ?").get(Number(info.lastInsertRowid));
 }
 
-export function updateBrand(slug, values) {
+export async function updateBrand(slug, values) {
   const cols = Object.keys(values);
   if (cols.length) {
-    db.prepare(`UPDATE brands SET ${cols.map((c) => `${c} = ?`).join(", ")} WHERE slug = ?`).run(
+    await db.prepare(`UPDATE brands SET ${cols.map((c) => `${c} = ?`).join(", ")} WHERE slug = ?`).run(
       ...cols.map((c) => values[c]),
       slug
     );

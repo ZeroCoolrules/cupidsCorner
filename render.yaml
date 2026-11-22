@@ -28,6 +28,11 @@ services:
         value: /var/data/uploads
       - key: VERIFICATIONS_DIR
         value: /var/data/verifications
+      # Postgres (e.g. a Supabase project's connection string). Optional:
+      # unset = SQLite at DB_PATH. Before setting it on a live site, copy the
+      # data across once: `npm run copy:sqlite-to-postgres` (see README).
+      - key: DATABASE_URL
+        sync: false
       # Usernames that can review verifications and reports (comma-separated).
       - key: ADMIN_USERNAMES
         sync: false

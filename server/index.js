@@ -63,6 +63,13 @@ import {
   DEFAULT_BRAND_SLUG,
 } from "./brands.js";
 
+// Array helpers for async callbacks (DB calls are async).
+const mapAsync = (arr, fn) => Promise.all(arr.map(fn));
+async function filterAsync(arr, fn) {
+  const keep = await Promise.all(arr.map(fn));
+  return arr.filter((_, i) => keep[i]);
+}
+
 export const REACTION_EMOJIS = ["❤️", "😂", "👍", "😮", "😢"];
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -131,10 +138,27 @@ const reportLimiter = rateLimit({
   message: "You've sent a lot of reports. Try again later.",
 });
 
-initDb();
-initBrands();
+await initDb();
+await initBrands();
 
 const app = express();
+// Route handlers are async (the database is); pass their errors to the
+// error handler at the bottom instead of leaving unhandled rejections.
+for (const method of ["get", "post", "put", "patch", "delete", "use"]) {
+  const original = app[method].bind(app);
+  app[method] = (...args) =>
+    original(
+      ...args.map((fn) =>
+        typeof fn === "function" && fn.length < 4
+          ? (req, res, next) => {
+              const out = fn(req, res, next);
+              if (out && typeof out.catch === "function") out.catch(next);
+              return out;
+            }
+          : fn
+      )
+    );
+}
 // Render terminates TLS in front of us; trust it so req.protocol is "https"
 // (x402 builds the 402 `resource.url` from it).
 app.set("trust proxy", 1);
@@ -150,8 +174,10 @@ app.use((req, res, next) => {
 app.use(
   cors({
     // Brand domains (see server/brands.js) are allowed alongside ALLOWED_ORIGINS.
-    origin: (origin, cb) =>
-      cb(null, !origin || ALLOWED_ORIGINS.includes(origin) || brandOrigins().includes(origin)),
+    origin: (origin, cb) => {
+      if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+      brandOrigins().then((list) => cb(null, list.includes(origin)), cb);
+    },
   })
 );
 // Basic hardening headers. The React client loads Stream and Stripe from
@@ -169,7 +195,7 @@ app.use((req, res, next) => {
 
 // Stripe needs the raw, unparsed request body to verify its signature, so
 // this route is registered before the global express.json() below.
-app.post("/api/billing/webhook", express.raw({ type: "application/json" }), (req, res) => {
+app.post("/api/billing/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   if (!isBillingConfigured()) return res.status(503).end();
   let event;
   try {
@@ -181,7 +207,7 @@ app.post("/api/billing/webhook", express.raw({ type: "application/json" }), (req
     const session = event.data.object;
     const userId = Number(session.metadata?.userId);
     const pack = PACK_BY_KEY[session.metadata?.packKey];
-    if (userId && pack) q.addSparks.run(pack.sparks, userId);
+    if (userId && pack) await q.addSparks.run(pack.sparks, userId);
   }
   res.json({ received: true });
 });
@@ -232,7 +258,7 @@ function markTyping(conversationId, userId) {
   if (!typingState.has(conversationId)) typingState.set(conversationId, new Map());
   typingState.get(conversationId).set(userId, Date.now() + 6000);
 }
-function typingNamesFor(conversationId, excludeUserId) {
+async function typingNamesFor(conversationId, excludeUserId) {
   const m = typingState.get(conversationId);
   if (!m) return [];
   const now = Date.now();
@@ -243,7 +269,7 @@ function typingNamesFor(conversationId, excludeUserId) {
       continue;
     }
     if (uid === excludeUserId) continue;
-    const p = q.profileById.get(uid);
+    const p = await q.profileById.get(uid);
     if (p) names.push(p.display_name);
   }
   return names;
@@ -457,7 +483,8 @@ const q = {
   upsertReadState: db.prepare(`
     INSERT INTO read_state (conversation_id, user_id, last_read_id) VALUES (?, ?, ?)
     ON CONFLICT(conversation_id, user_id) DO UPDATE SET
-      last_read_id = MAX(last_read_id, excluded.last_read_id), updated_at = datetime('now')
+      last_read_id = CASE WHEN read_state.last_read_id > excluded.last_read_id
+        THEN read_state.last_read_id ELSE excluded.last_read_id END, updated_at = datetime('now')
   `),
   readStateAll: db.prepare("SELECT user_id, last_read_id FROM read_state WHERE conversation_id = ?"),
   latestVerification: db.prepare(
@@ -496,8 +523,8 @@ function ageError(age) {
   return null;
 }
 
-function publicUser(userId) {
-  const p = q.profileById.get(userId);
+async function publicUser(userId) {
+  const p = await q.profileById.get(userId);
   if (!p) return null;
   return {
     id: userId,
@@ -515,30 +542,30 @@ function publicUser(userId) {
     sparks: p.sparks,
     lastSeenAt: p.last_seen_at,
     premiumUntil: p.premium_until || null,
-    isPremium: !!q.isPremium.get(userId)?.active,
+    isPremium: !!(await q.isPremium.get(userId))?.active,
     isVerified: !!p.verified_at,
   };
 }
 
-function auth(req, res, next) {
+async function auth(req, res, next) {
   const header = req.get("authorization") || "";
   const token = header.replace(/^Bearer\s+/i, "").trim();
-  const sess = token && q.sessionByToken.get(token, SESSION_DAYS);
+  const sess = token && await q.sessionByToken.get(token, SESSION_DAYS);
   if (!sess) return res.status(401).json({ error: "Not signed in" });
   if (sess.banned_at) return res.status(403).json({ error: "This account has been suspended." });
   req.userId = sess.user_id;
   req.username = sess.username;
-  q.touchLastSeen.run(req.userId);
+  await q.touchLastSeen.run(req.userId);
   next();
 }
 
-function ensureAiConversation(userId) {
-  let row = q.aiConvFor.get(userId);
+async function ensureAiConversation(userId) {
+  let row = await q.aiConvFor.get(userId);
   if (row) return row.id;
-  const conv = q.insertConversation.run("ai", "Cupid", null);
+  const conv = await q.insertConversation.run("ai", "Cupid", null);
   const id = Number(conv.lastInsertRowid);
-  q.insertMember.run(id, userId);
-  q.insertMessage.run(id, null, "ai", CUPID_WELCOME, null);
+  await q.insertMember.run(id, userId);
+  await q.insertMessage.run(id, null, "ai", CUPID_WELCOME, null);
   return id;
 }
 
@@ -546,7 +573,7 @@ function ensureAiConversation(userId) {
 // configured) the live Stream channel, so it shows up no matter which
 // transport the client ends up using.
 async function announce(conversationId, text) {
-  q.insertMessage.run(conversationId, null, "system", text, null);
+  await q.insertMessage.run(conversationId, null, "system", text, null);
   await safeStream(() => sendSystemMessage(conversationId, text));
 }
 
@@ -577,11 +604,11 @@ app.get("/api/public/brand", (req, res) => {
   res.json(publicBrand(req.brand));
 });
 
-app.get("/api/public/stats", (req, res) => {
-  const members = db.prepare("SELECT COUNT(*) c FROM users").get().c;
-  const rooms = db.prepare("SELECT COUNT(*) c FROM conversations WHERE type='room'").get().c;
-  const matches = db.prepare("SELECT COUNT(*) c FROM matches").get().c;
-  const gifts = db.prepare("SELECT COUNT(*) c FROM gifts_sent").get().c;
+app.get("/api/public/stats", async (req, res) => {
+  const members = (await db.prepare("SELECT COUNT(*) c FROM users").get()).c;
+  const rooms = (await db.prepare("SELECT COUNT(*) c FROM conversations WHERE type='room'").get()).c;
+  const matches = (await db.prepare("SELECT COUNT(*) c FROM matches").get()).c;
+  const gifts = (await db.prepare("SELECT COUNT(*) c FROM gifts_sent").get()).c;
   res.json({ members, rooms, matches, gifts });
 });
 
@@ -589,7 +616,7 @@ app.get("/api/public/stats", (req, res) => {
 // auth routes
 // ---------------------------------------------------------------------------
 
-app.post("/api/auth/signup", authLimiter, (req, res) => {
+app.post("/api/auth/signup", authLimiter, async (req, res) => {
   const {
     username,
     password,
@@ -621,16 +648,16 @@ app.post("/api/auth/signup", authLimiter, (req, res) => {
   if (String(password).length < MIN_PASSWORD) {
     return res.status(400).json({ error: `Passwords need at least ${MIN_PASSWORD} characters.` });
   }
-  if (q.userByName.get(username)) {
+  if (await q.userByName.get(username)) {
     return res.status(409).json({ error: "That username is taken" });
   }
 
   const hash = bcrypt.hashSync(String(password), 10);
-  const info = q.insertUser.run(String(username).trim(), hash);
+  const info = await q.insertUser.run(String(username).trim(), hash);
   const userId = Number(info.lastInsertRowid);
-  q.setUserBrand.run(req.brand.id, userId);
-  q.acceptTerms.run(userId);
-  q.insertProfile.run({
+  await q.setUserBrand.run(req.brand.id, userId);
+  await q.acceptTerms.run(userId);
+  await q.insertProfile.run({
     user_id: userId,
     display_name: String(displayName).trim(),
     age: Number(age),
@@ -642,21 +669,21 @@ app.post("/api/auth/signup", authLimiter, (req, res) => {
     avatar_color: String(avatarColor),
     interests: JSON.stringify(Array.isArray(interests) ? interests : []),
   });
-  ensureAiConversation(userId);
+  await ensureAiConversation(userId);
 
   const token = crypto.randomBytes(24).toString("hex");
-  q.insertSession.run(token, userId);
-  res.json({ token, user: publicUser(userId) });
+  await q.insertSession.run(token, userId);
+  res.json({ token, user: await publicUser(userId) });
 });
 
-app.post("/api/auth/login", authLimiter, (req, res) => {
+app.post("/api/auth/login", authLimiter, async (req, res) => {
   const { username, password } = req.body || {};
   const login = String(username || "").trim();
   // Members imported from DatingPro can sign in with their DatingPro email.
   const user =
     login &&
-    (q.userByName.get(login) ||
-      (login.includes("@") && q.userByDatingProEmail.get(login.toLowerCase())));
+    (await q.userByName.get(login) ||
+      (login.includes("@") && await q.userByDatingProEmail.get(login.toLowerCase())));
   if (!user || !bcrypt.compareSync(String(password || ""), user.password_hash)) {
     return res.status(401).json({ error: "Wrong username or password" });
   }
@@ -664,14 +691,14 @@ app.post("/api/auth/login", authLimiter, (req, res) => {
     return res.status(403).json({ error: "This account has been suspended." });
   }
   const token = crypto.randomBytes(24).toString("hex");
-  q.insertSession.run(token, user.id);
-  ensureAiConversation(user.id);
-  res.json({ token, user: publicUser(user.id) });
+  await q.insertSession.run(token, user.id);
+  await ensureAiConversation(user.id);
+  res.json({ token, user: await publicUser(user.id) });
 });
 
-app.post("/api/auth/logout", auth, (req, res) => {
+app.post("/api/auth/logout", auth, async (req, res) => {
   const token = (req.get("authorization") || "").replace(/^Bearer\s+/i, "").trim();
-  q.deleteSession.run(token);
+  await q.deleteSession.run(token);
   res.json({ ok: true });
 });
 
@@ -679,18 +706,18 @@ app.post("/api/auth/logout", auth, (req, res) => {
 // profile
 // ---------------------------------------------------------------------------
 
-app.get("/api/me", auth, (req, res) => {
-  res.json({ user: publicUser(req.userId) });
+app.get("/api/me", auth, async (req, res) => {
+  res.json({ user: await publicUser(req.userId) });
 });
 
-app.put("/api/me", auth, (req, res) => {
-  const cur = q.profileById.get(req.userId);
+app.put("/api/me", auth, async (req, res) => {
+  const cur = await q.profileById.get(req.userId);
   const b = req.body || {};
   if (b.age != null && b.age !== "") {
     const tooYoung = ageError(b.age);
     if (tooYoung) return res.status(400).json({ error: tooYoung });
   }
-  q.updateProfile.run({
+  await q.updateProfile.run({
     user_id: req.userId,
     display_name: String(b.displayName ?? cur.display_name).trim(),
     age: b.age != null && b.age !== "" ? Number(b.age) : cur.age,
@@ -714,45 +741,45 @@ app.put("/api/me", auth, (req, res) => {
         answer: String(p?.answer || "").slice(0, 300),
       }))
       .filter((p) => p.question && p.answer);
-    q.updatePrompts.run(JSON.stringify(cleaned), req.userId);
+    await q.updatePrompts.run(JSON.stringify(cleaned), req.userId);
   }
-  res.json({ user: publicUser(req.userId) });
+  res.json({ user: await publicUser(req.userId) });
 });
 
-app.post("/api/me/photo", auth, upload.single("photo"), (req, res) => {
+app.post("/api/me/photo", auth, upload.single("photo"), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: "Upload a jpg, png, webp, or gif under 5MB." });
   }
-  const cur = q.profileById.get(req.userId);
+  const cur = await q.profileById.get(req.userId);
   if (cur.photo_url) {
     fs.unlink(path.join(uploadsDir, path.basename(cur.photo_url)), () => {});
   }
-  q.setPhoto.run(`/uploads/${req.file.filename}`, req.userId);
-  res.json({ user: publicUser(req.userId) });
+  await q.setPhoto.run(`/uploads/${req.file.filename}`, req.userId);
+  res.json({ user: await publicUser(req.userId) });
 });
 
-app.delete("/api/me/photo", auth, (req, res) => {
-  const cur = q.profileById.get(req.userId);
+app.delete("/api/me/photo", auth, async (req, res) => {
+  const cur = await q.profileById.get(req.userId);
   if (cur.photo_url) {
     fs.unlink(path.join(uploadsDir, path.basename(cur.photo_url)), () => {});
   }
-  q.setPhoto.run(null, req.userId);
-  res.json({ user: publicUser(req.userId) });
+  await q.setPhoto.run(null, req.userId);
+  res.json({ user: await publicUser(req.userId) });
 });
 
 // Permanently deletes the account and everything that cascades from it
 // (profile, swipes, matches, messages, gifts, reports they made...).
-app.delete("/api/me", auth, (req, res) => {
-  const user = q.userById.get(req.userId);
+app.delete("/api/me", auth, async (req, res) => {
+  const user = await q.userById.get(req.userId);
   if (!bcrypt.compareSync(String(req.body?.password || ""), user.password_hash)) {
     return res.status(401).json({ error: "That password isn't right." });
   }
-  const profile = q.profileById.get(req.userId);
+  const profile = await q.profileById.get(req.userId);
   if (profile?.photo_url) fs.unlink(path.join(uploadsDir, path.basename(profile.photo_url)), () => {});
-  for (const v of q.verificationsFor.all(req.userId)) {
+  for (const v of await q.verificationsFor.all(req.userId)) {
     fs.unlink(path.join(verificationsDir, path.basename(v.selfie_file)), () => {});
   }
-  q.deleteUser.run(req.userId);
+  await q.deleteUser.run(req.userId);
   res.json({ ok: true });
 });
 
@@ -761,22 +788,22 @@ app.get("/api/prompts/bank", (req, res) => {
 });
 
 // Public profile: another user's card plus their rating / fan / gift stats.
-app.get("/api/users/:id", auth, (req, res) => {
+app.get("/api/users/:id", auth, async (req, res) => {
   const id = Number(req.params.id);
-  const user = publicUser(id);
-  if (!user || (id !== req.userId && q.userById.get(id)?.banned_at)) {
+  const user = await publicUser(id);
+  if (!user || (id !== req.userId && (await q.userById.get(id))?.banned_at)) {
     return res.status(404).json({ error: "no such user" });
   }
-  const rating = q.ratingSummary.get(id);
-  const mine = q.myRating.get(req.userId, id);
+  const rating = await q.ratingSummary.get(id);
+  const mine = await q.myRating.get(req.userId, id);
   res.json({
     user: id === req.userId ? user : { ...user, sparks: undefined },
     isSelf: id === req.userId,
     rating: { average: rating.avg, count: rating.n },
     myRating: mine ? mine.stars : null,
-    fans: { count: q.fanCount.get(id).c, amIFan: !!q.amIFan.get(req.userId, id) },
-    gifts: { receivedCount: q.giftsReceivedCount.get(id).c },
-    amIBlocking: !!q.amIBlocking.get(req.userId, id),
+    fans: { count: (await q.fanCount.get(id)).c, amIFan: !!await q.amIFan.get(req.userId, id) },
+    gifts: { receivedCount: (await q.giftsReceivedCount.get(id)).c },
+    amIBlocking: !!await q.amIBlocking.get(req.userId, id),
   });
 });
 
@@ -785,114 +812,118 @@ app.get("/api/users/:id", auth, (req, res) => {
 app.post("/api/users/:id/block", auth, async (req, res) => {
   const id = Number(req.params.id);
   if (id === req.userId) return res.status(400).json({ error: "can't block yourself" });
-  if (!q.userById.get(id)) return res.status(404).json({ error: "no such user" });
-  q.addBlock.run(req.userId, id);
-  const dm = q.dmBetween.get(req.userId, id);
+  if (!await q.userById.get(id)) return res.status(404).json({ error: "no such user" });
+  await q.addBlock.run(req.userId, id);
+  const dm = await q.dmBetween.get(req.userId, id);
   if (dm) await safeStream(() => setChannelFrozen(dm.id, true));
   res.json({ ok: true, blocked: true });
 });
 
 app.delete("/api/users/:id/block", auth, async (req, res) => {
   const id = Number(req.params.id);
-  q.removeBlock.run(req.userId, id);
+  await q.removeBlock.run(req.userId, id);
   // Stay frozen if the other person is still blocking this user.
-  const dm = q.dmBetween.get(req.userId, id);
-  if (dm && !q.isBlocked.get(req.userId, id, id, req.userId)) {
+  const dm = await q.dmBetween.get(req.userId, id);
+  if (dm && !await q.isBlocked.get(req.userId, id, id, req.userId)) {
     await safeStream(() => setChannelFrozen(dm.id, false));
   }
   res.json({ ok: true, blocked: false });
 });
 
-app.post("/api/users/:id/report", auth, reportLimiter, (req, res) => {
+app.post("/api/users/:id/report", auth, reportLimiter, async (req, res) => {
   const id = Number(req.params.id);
-  if (!q.userById.get(id)) return res.status(404).json({ error: "no such user" });
+  if (!await q.userById.get(id)) return res.status(404).json({ error: "no such user" });
   const reason = String(req.body?.reason || "").trim().slice(0, 500) || "No reason given";
-  q.insertReport.run(req.userId, id, reason);
+  await q.insertReport.run(req.userId, id, reason);
   res.json({ ok: true });
 });
 
 // Free users get a count + upgrade prompt; premium unlocks the full list.
-app.get("/api/likes", auth, (req, res) => {
-  const rows = q.likedMeNotBack
-    .all(req.userId, req.userId)
-    .filter((r) => !q.isBlocked.get(req.userId, r.swiper_id, r.swiper_id, req.userId));
-  const premium = !!q.isPremium.get(req.userId)?.active;
+app.get("/api/likes", auth, async (req, res) => {
+  const rows = await filterAsync(
+    await q.likedMeNotBack.all(req.userId, req.userId),
+    async (r) => !(await q.isBlocked.get(req.userId, r.swiper_id, r.swiper_id, req.userId))
+  );
+  const premium = !!(await q.isPremium.get(req.userId))?.active;
   res.json({
     count: rows.length,
     locked: !premium,
-    profiles: premium ? rows.map((r) => publicUser(r.swiper_id)) : [],
+    profiles: premium ? await mapAsync(rows, (r) => publicUser(r.swiper_id)) : [],
   });
 });
 
-app.post("/api/me/premium", auth, (req, res) => {
-  const me = q.profileById.get(req.userId);
+app.post("/api/me/premium", auth, async (req, res) => {
+  const me = await q.profileById.get(req.userId);
   if (me.sparks < PREMIUM_COST_SPARKS) {
     return res.status(400).json({ error: `Not enough sparks — Premium costs ${PREMIUM_COST_SPARKS}.` });
   }
-  q.addSparks.run(-PREMIUM_COST_SPARKS, req.userId);
-  q.extendPremium.run(PREMIUM_DAYS, req.userId);
-  res.json({ user: publicUser(req.userId) });
+  // Atomic: two requests at once can't spend the same sparks twice.
+  if ((await q.spendSparks.run(PREMIUM_COST_SPARKS, req.userId, PREMIUM_COST_SPARKS)).changes === 0) {
+    return res.status(400).json({ error: "Not enough sparks." });
+  }
+  await q.extendPremium.run(PREMIUM_DAYS, req.userId);
+  res.json({ user: await publicUser(req.userId) });
 });
 
-app.post("/api/me/daily-bonus", auth, (req, res) => {
-  const row = q.bonusEligible.get(DAILY_BONUS_COOLDOWN_HOURS, req.userId);
+app.post("/api/me/daily-bonus", auth, async (req, res) => {
+  const row = await q.bonusEligible.get(DAILY_BONUS_COOLDOWN_HOURS, req.userId);
   if (!row.eligible) {
-    return res.json({ claimed: false, sparks: q.profileById.get(req.userId).sparks });
+    return res.json({ claimed: false, sparks: (await q.profileById.get(req.userId)).sparks });
   }
-  q.claimBonus.run(DAILY_BONUS_SPARKS, req.userId);
+  await q.claimBonus.run(DAILY_BONUS_SPARKS, req.userId);
   res.json({
     claimed: true,
     amount: DAILY_BONUS_SPARKS,
-    sparks: q.profileById.get(req.userId).sparks,
+    sparks: (await q.profileById.get(req.userId)).sparks,
   });
 });
 
-app.get("/api/users/:id/gifts", auth, (req, res) => {
+app.get("/api/users/:id/gifts", auth, async (req, res) => {
   const id = Number(req.params.id);
-  const rows = q.giftsReceived.all(id).map((g) => ({
+  const rows = (await q.giftsReceived.all(id)).map((g) => ({
     id: g.id,
     gift: GIFT_BY_KEY[g.gift_key] || { key: g.gift_key, emoji: "🎁", name: g.gift_key },
     sender: { name: g.sender_name, emoji: g.sender_emoji, color: g.sender_color },
     createdAt: g.created_at,
   }));
-  res.json({ gifts: rows, total: q.giftsReceivedCount.get(id).c });
+  res.json({ gifts: rows, total: (await q.giftsReceivedCount.get(id)).c });
 });
 
-app.post("/api/users/:id/rating", auth, (req, res) => {
+app.post("/api/users/:id/rating", auth, async (req, res) => {
   const id = Number(req.params.id);
   if (id === req.userId) return res.status(400).json({ error: "can't rate yourself" });
-  if (!q.userById.get(id)) return res.status(404).json({ error: "no such user" });
-  if (q.isBlocked.get(req.userId, id, id, req.userId)) return res.status(403).json({ error: "unavailable" });
+  if (!await q.userById.get(id)) return res.status(404).json({ error: "no such user" });
+  if (await q.isBlocked.get(req.userId, id, id, req.userId)) return res.status(403).json({ error: "unavailable" });
   const stars = Number(req.body?.stars);
   if (!Number.isInteger(stars) || stars < 1 || stars > 5) {
     return res.status(400).json({ error: "stars must be 1-5" });
   }
-  q.upsertRating.run(req.userId, id, stars);
-  const rating = q.ratingSummary.get(id);
+  await q.upsertRating.run(req.userId, id, stars);
+  const rating = await q.ratingSummary.get(id);
   res.json({ rating: { average: rating.avg, count: rating.n }, myRating: stars });
 });
 
-app.post("/api/users/:id/fan", auth, (req, res) => {
+app.post("/api/users/:id/fan", auth, async (req, res) => {
   const id = Number(req.params.id);
   if (id === req.userId) return res.status(400).json({ error: "can't fan yourself" });
-  if (!q.userById.get(id)) return res.status(404).json({ error: "no such user" });
-  if (q.isBlocked.get(req.userId, id, id, req.userId)) return res.status(403).json({ error: "unavailable" });
-  q.addFan.run(req.userId, id);
-  res.json({ fans: { count: q.fanCount.get(id).c, amIFan: true } });
+  if (!await q.userById.get(id)) return res.status(404).json({ error: "no such user" });
+  if (await q.isBlocked.get(req.userId, id, id, req.userId)) return res.status(403).json({ error: "unavailable" });
+  await q.addFan.run(req.userId, id);
+  res.json({ fans: { count: (await q.fanCount.get(id)).c, amIFan: true } });
 });
 
-app.delete("/api/users/:id/fan", auth, (req, res) => {
+app.delete("/api/users/:id/fan", auth, async (req, res) => {
   const id = Number(req.params.id);
-  q.removeFan.run(req.userId, id);
-  res.json({ fans: { count: q.fanCount.get(id).c, amIFan: false } });
+  await q.removeFan.run(req.userId, id);
+  res.json({ fans: { count: (await q.fanCount.get(id)).c, amIFan: false } });
 });
 
 // ---------------------------------------------------------------------------
 // gifts
 // ---------------------------------------------------------------------------
 
-app.get("/api/gifts/catalog", auth, (req, res) => {
-  res.json({ catalog: GIFT_CATALOG, sparks: q.profileById.get(req.userId).sparks });
+app.get("/api/gifts/catalog", auth, async (req, res) => {
+  res.json({ catalog: GIFT_CATALOG, sparks: (await q.profileById.get(req.userId)).sparks });
 });
 
 app.post("/api/gifts/send", auth, async (req, res) => {
@@ -902,30 +933,33 @@ app.post("/api/gifts/send", auth, async (req, res) => {
   const gift = GIFT_BY_KEY[giftKey];
 
   if (!gift) return res.status(400).json({ error: "unknown gift" });
-  if (!recipientId || recipientId === req.userId || !q.userById.get(recipientId)) {
+  if (!recipientId || recipientId === req.userId || !await q.userById.get(recipientId)) {
     return res.status(400).json({ error: "bad recipient" });
   }
-  if (q.isBlocked.get(req.userId, recipientId, recipientId, req.userId)) {
+  if (await q.isBlocked.get(req.userId, recipientId, recipientId, req.userId)) {
     return res.status(403).json({ error: "unavailable" });
   }
-  const me = q.profileById.get(req.userId);
+  const me = await q.profileById.get(req.userId);
   if (me.sparks < gift.cost) {
     return res.status(400).json({ error: `Not enough sparks — ${gift.name} costs ${gift.cost}.` });
   }
-  if (conversationId && !q.isMember.get(conversationId, req.userId)) {
+  if (conversationId && !await q.isMember.get(conversationId, req.userId)) {
     return res.status(403).json({ error: "not a member of that conversation" });
   }
 
-  q.addSparks.run(-gift.cost, req.userId);
-  q.insertGift.run(req.userId, recipientId, giftKey, conversationId);
+  // Atomic: two requests at once can't spend the same sparks twice.
+  if ((await q.spendSparks.run(gift.cost, req.userId, gift.cost)).changes === 0) {
+    return res.status(400).json({ error: "Not enough sparks." });
+  }
+  await q.insertGift.run(req.userId, recipientId, giftKey, conversationId);
 
   if (conversationId) {
-    const text = `${publicUser(req.userId).displayName} sent ${gift.emoji} ${gift.name}`;
-    q.insertMessage.run(conversationId, req.userId, "gift", text, giftKey);
+    const text = `${(await publicUser(req.userId)).displayName} sent ${gift.emoji} ${gift.name}`;
+    await q.insertMessage.run(conversationId, req.userId, "gift", text, giftKey);
     await safeStream(() => sendGiftMessage(conversationId, req.userId, gift));
   }
 
-  res.json({ ok: true, sparks: q.profileById.get(req.userId).sparks, gift });
+  res.json({ ok: true, sparks: (await q.profileById.get(req.userId)).sparks, gift });
 });
 
 // ---------------------------------------------------------------------------
@@ -936,29 +970,29 @@ function verificationView(v) {
   return v ? { id: v.id, status: v.status, createdAt: v.created_at, reviewedAt: v.reviewed_at } : null;
 }
 
-app.get("/api/me/verification", auth, (req, res) => {
+app.get("/api/me/verification", auth, async (req, res) => {
   res.json({
-    verification: verificationView(q.latestVerification.get(req.userId)),
-    isVerified: !!q.profileById.get(req.userId).verified_at,
+    verification: verificationView(await q.latestVerification.get(req.userId)),
+    isVerified: !!(await q.profileById.get(req.userId)).verified_at,
     isAdmin: isAdmin(req.username),
   });
 });
 
-app.post("/api/me/verification", auth, verificationUpload.single("selfie"), (req, res) => {
+app.post("/api/me/verification", auth, verificationUpload.single("selfie"), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: "Upload a jpg, png, or webp selfie under 5MB." });
   }
-  const latest = q.latestVerification.get(req.userId);
+  const latest = await q.latestVerification.get(req.userId);
   if (latest?.status === "pending") {
     fs.unlink(req.file.path, () => {});
     return res.status(409).json({ error: "Your last selfie is still being reviewed." });
   }
-  if (q.profileById.get(req.userId).verified_at) {
+  if ((await q.profileById.get(req.userId)).verified_at) {
     fs.unlink(req.file.path, () => {});
     return res.status(409).json({ error: "You're already verified." });
   }
-  q.insertVerification.run(req.userId, req.file.filename);
-  res.json({ verification: verificationView(q.latestVerification.get(req.userId)) });
+  await q.insertVerification.run(req.userId, req.file.filename);
+  res.json({ verification: verificationView(await q.latestVerification.get(req.userId)) });
 });
 
 function adminOnly(req, res, next) {
@@ -966,26 +1000,26 @@ function adminOnly(req, res, next) {
   next();
 }
 
-app.get("/api/admin/verifications", auth, adminOnly, (req, res) => {
-  const items = q.pendingVerifications.all().map((v) => ({
+app.get("/api/admin/verifications", auth, adminOnly, async (req, res) => {
+  const items = await mapAsync(await q.pendingVerifications.all(), async (v) => ({
     ...verificationView(v),
-    user: publicUser(v.user_id),
+    user: await publicUser(v.user_id),
   }));
   res.json({ items });
 });
 
-app.get("/api/admin/verifications/:id/selfie", auth, adminOnly, (req, res) => {
-  const v = q.verificationById.get(Number(req.params.id));
+app.get("/api/admin/verifications/:id/selfie", auth, adminOnly, async (req, res) => {
+  const v = await q.verificationById.get(Number(req.params.id));
   if (!v) return res.status(404).json({ error: "not found" });
   res.sendFile(path.join(verificationsDir, path.basename(v.selfie_file)));
 });
 
-app.get("/api/admin/reports", auth, adminOnly, (req, res) => {
+app.get("/api/admin/reports", auth, adminOnly, async (req, res) => {
   const byUser = new Map();
-  for (const r of q.openReports.all()) {
+  for (const r of await q.openReports.all()) {
     if (!byUser.has(r.reported_id)) {
       byUser.set(r.reported_id, {
-        user: publicUser(r.reported_id),
+        user: await publicUser(r.reported_id),
         banned: !!r.banned_at,
         reporters: new Set(),
         reports: [],
@@ -1001,51 +1035,52 @@ app.get("/api/admin/reports", auth, adminOnly, (req, res) => {
   res.json({ items });
 });
 
-app.post("/api/admin/users/:id/dismiss-reports", auth, adminOnly, (req, res) => {
-  q.resolveReportsFor.run("dismissed", Number(req.params.id));
+app.post("/api/admin/users/:id/dismiss-reports", auth, adminOnly, async (req, res) => {
+  await q.resolveReportsFor.run("dismissed", Number(req.params.id));
   res.json({ ok: true });
 });
 
-app.post("/api/admin/users/:id/ban", auth, adminOnly, (req, res) => {
+app.post("/api/admin/users/:id/ban", auth, adminOnly, async (req, res) => {
   const id = Number(req.params.id);
-  const target = q.userById.get(id);
+  const target = await q.userById.get(id);
   if (!target) return res.status(404).json({ error: "no such user" });
   if (isAdmin(target.username)) return res.status(400).json({ error: "can't ban an admin" });
-  q.banUser.run(String(req.body?.reason || "").slice(0, 300) || "Community guidelines", id);
-  q.deleteUserSessions.run(id);
-  q.resolveReportsFor.run("banned", id);
+  await q.banUser.run(String(req.body?.reason || "").slice(0, 300) || "Community guidelines", id);
+  await q.deleteUserSessions.run(id);
+  await q.resolveReportsFor.run("banned", id);
   res.json({ ok: true });
 });
 
 // ---- brands (white-label sites) ---------------------------------------------
 
-app.get("/api/admin/brands", auth, adminOnly, (req, res) => {
+app.get("/api/admin/brands", auth, adminOnly, async (req, res) => {
   const counts = Object.fromEntries(
-    db.prepare("SELECT brand_id, COUNT(*) c FROM users GROUP BY brand_id").all().map((r) => [r.brand_id, r.c])
+    (await db.prepare("SELECT brand_id, COUNT(*) c FROM users GROUP BY brand_id").all()).map((r) => [r.brand_id, r.c])
   );
-  res.json(listBrands().map((b) => ({ ...publicBrand(b), active: !!b.active, members: counts[b.id] || 0 })));
+  res.json((await listBrands()).map((b) => ({ ...publicBrand(b), active: !!b.active, members: counts[b.id] || 0 })));
 });
 
 function brandWriteError(res, err) {
-  if (String(err?.message || "").includes("UNIQUE")) {
+  // SQLite: "UNIQUE constraint failed"; Postgres: code 23505.
+  if (err?.code === "23505" || String(err?.message || "").includes("UNIQUE")) {
     return res.status(409).json({ error: "That slug or domain is already used by another brand" });
   }
   throw err;
 }
 
-app.post("/api/admin/brands", auth, adminOnly, (req, res) => {
+app.post("/api/admin/brands", auth, adminOnly, async (req, res) => {
   const { error, values } = brandInput(req.body, { creating: true });
   if (error) return res.status(400).json({ error });
   try {
-    res.status(201).json(publicBrand(createBrand(values)));
+    res.status(201).json(publicBrand(await createBrand(values)));
   } catch (err) {
     brandWriteError(res, err);
   }
 });
 
-app.put("/api/admin/brands/:slug", auth, adminOnly, (req, res) => {
+app.put("/api/admin/brands/:slug", auth, adminOnly, async (req, res) => {
   const slug = String(req.params.slug).toLowerCase();
-  if (!db.prepare("SELECT 1 FROM brands WHERE slug = ?").get(slug)) {
+  if (!await db.prepare("SELECT 1 FROM brands WHERE slug = ?").get(slug)) {
     return res.status(404).json({ error: "no such brand" });
   }
   const { error, values } = brandInput(req.body, { creating: false });
@@ -1054,19 +1089,19 @@ app.put("/api/admin/brands/:slug", auth, adminOnly, (req, res) => {
     return res.status(400).json({ error: "The default brand can't be renamed or switched off" });
   }
   try {
-    res.json(publicBrand(updateBrand(slug, values)));
+    res.json(publicBrand(await updateBrand(slug, values)));
   } catch (err) {
     brandWriteError(res, err);
   }
 });
 
-app.post("/api/admin/verifications/:id/decision", auth, adminOnly, (req, res) => {
-  const v = q.verificationById.get(Number(req.params.id));
+app.post("/api/admin/verifications/:id/decision", auth, adminOnly, async (req, res) => {
+  const v = await q.verificationById.get(Number(req.params.id));
   if (!v) return res.status(404).json({ error: "not found" });
   if (v.status !== "pending") return res.status(409).json({ error: "already decided" });
   const approve = req.body?.approve === true;
-  q.decideVerification.run(approve ? "approved" : "rejected", req.userId, v.id);
-  if (approve) q.setVerifiedAt.run(new Date().toISOString(), v.user_id);
+  await q.decideVerification.run(approve ? "approved" : "rejected", req.userId, v.id);
+  if (approve) await q.setVerifiedAt.run(new Date().toISOString(), v.user_id);
   // The selfie is only needed for review; don't keep it afterwards.
   fs.unlink(path.join(verificationsDir, path.basename(v.selfie_file)), () => {});
   res.json({ ok: true, status: approve ? "approved" : "rejected" });
@@ -1076,19 +1111,19 @@ app.post("/api/admin/verifications/:id/decision", auth, adminOnly, (req, res) =>
 // virtual dates (ported from Bid-Love)
 // ---------------------------------------------------------------------------
 
-app.get("/api/dates/scenarios", auth, (req, res) => {
-  res.json({ scenarios: DATE_SCENARIOS, sparks: q.profileById.get(req.userId).sparks });
+app.get("/api/dates/scenarios", auth, async (req, res) => {
+  res.json({ scenarios: DATE_SCENARIOS, sparks: (await q.profileById.get(req.userId)).sparks });
 });
 
 app.post("/api/dates", auth, async (req, res) => {
   const partnerId = Number(req.body?.partnerId);
-  if (!partnerId || partnerId === req.userId || !q.userById.get(partnerId)) {
+  if (!partnerId || partnerId === req.userId || !await q.userById.get(partnerId)) {
     return res.status(400).json({ error: "bad partner" });
   }
-  if (!q.matchBetween.get(...pair(req.userId, partnerId))) {
+  if (!await q.matchBetween.get(...pair(req.userId, partnerId))) {
     return res.status(403).json({ error: "You can only go on virtual dates with your matches." });
   }
-  if (q.isBlocked.get(req.userId, partnerId, partnerId, req.userId)) {
+  if (await q.isBlocked.get(req.userId, partnerId, partnerId, req.userId)) {
     return res.status(403).json({ error: "unavailable" });
   }
   let outcome;
@@ -1098,22 +1133,22 @@ app.post("/api/dates", auth, async (req, res) => {
     return res.status(400).json({ error: err.message });
   }
   const { scenario, score, cost } = outcome;
-  if (cost > 0 && q.spendSparks.run(cost, req.userId, cost).changes === 0) {
+  if (cost > 0 && (await q.spendSparks.run(cost, req.userId, cost)).changes === 0) {
     return res.status(400).json({ error: `Not enough sparks — this date costs ${cost}.` });
   }
-  q.insertVirtualDate.run(req.userId, partnerId, scenario.key, score, cost);
+  await q.insertVirtualDate.run(req.userId, partnerId, scenario.key, score, cost);
 
   const verdict = verdictFor(score);
-  const dm = q.dmBetween.get(req.userId, partnerId);
+  const dm = await q.dmBetween.get(req.userId, partnerId);
   if (dm) {
-    const me = publicUser(req.userId).displayName;
+    const me = (await publicUser(req.userId)).displayName;
     await announce(dm.id, `${scenario.emoji} ${me} took you on a virtual date at the ${scenario.title}: ${score}% chemistry. ${verdict}!`);
   }
   res.json({
     score,
     verdict,
     sparksSpent: cost,
-    sparks: q.profileById.get(req.userId).sparks,
+    sparks: (await q.profileById.get(req.userId)).sparks,
     conversationId: dm ? dm.id : null,
   });
 });
@@ -1122,7 +1157,7 @@ app.post("/api/dates", auth, async (req, res) => {
 // discovery + swiping
 // ---------------------------------------------------------------------------
 
-app.get("/api/discover", auth, (req, res) => {
+app.get("/api/discover", auth, async (req, res) => {
   const clauses = [
     "p.user_id != ?",
     "p.user_id NOT IN (SELECT target_id FROM swipes WHERE swiper_id = ?)",
@@ -1144,11 +1179,11 @@ app.get("/api/discover", auth, (req, res) => {
   }
   const interest = String(req.query.interest || "").trim().slice(0, 60);
   if (interest) {
-    clauses.push("p.interests LIKE ?");
+    clauses.push("LOWER(p.interests) LIKE LOWER(?)");
     params.push(`%${interest}%`);
   }
   if (req.query.sameCity === "1") {
-    const me = q.profileById.get(req.userId);
+    const me = await q.profileById.get(req.userId);
     if (me.city) {
       clauses.push("p.city = ?");
       params.push(me.city);
@@ -1156,8 +1191,8 @@ app.get("/api/discover", auth, (req, res) => {
   }
 
   // Pull a wide pool, then rank it in JS (see server/matching.js).
-  const me = q.profileById.get(req.userId);
-  const pool = db
+  const me = await q.profileById.get(req.userId);
+  const pool = await db
     .prepare(
       `SELECT p.*, u.created_at,
          (p.premium_until IS NOT NULL AND p.premium_until > datetime('now')) AS is_premium,
@@ -1176,8 +1211,8 @@ app.get("/api/discover", auth, (req, res) => {
     .slice(0, 25);
 
   res.json({
-    profiles: ranked.map(({ c, s }) => ({
-      ...publicUser(c.user_id),
+    profiles: await mapAsync(ranked, async ({ c, s }) => ({
+      ...(await publicUser(c.user_id)),
       match: { percent: matchPercent(s.score), reasons: s.reasons },
     })),
   });
@@ -1186,38 +1221,38 @@ app.get("/api/discover", auth, (req, res) => {
 app.post("/api/swipe", auth, async (req, res) => {
   const targetId = Number(req.body?.targetId);
   const direction = req.body?.direction === "like" ? "like" : "pass";
-  if (!targetId || targetId === req.userId || !q.userById.get(targetId)) {
+  if (!targetId || targetId === req.userId || !await q.userById.get(targetId)) {
     return res.status(400).json({ error: "bad target" });
   }
-  if (q.isBlocked.get(req.userId, targetId, targetId, req.userId)) {
+  if (await q.isBlocked.get(req.userId, targetId, targetId, req.userId)) {
     return res.status(403).json({ error: "unavailable" });
   }
-  q.insertSwipe.run(req.userId, targetId, direction);
+  await q.insertSwipe.run(req.userId, targetId, direction);
 
   let matched = false;
   let conversationId = null;
   if (direction === "like") {
-    const back = q.swipeBetween.get(targetId, req.userId);
+    const back = await q.swipeBetween.get(targetId, req.userId);
     if (back && back.direction === "like") {
       const [a, b] = pair(req.userId, targetId);
-      q.insertMatch.run(a, b);
+      await q.insertMatch.run(a, b);
       matched = true;
       // create the DM conversation for the match if missing
-      const existing = q.dmBetween.get(req.userId, targetId);
+      const existing = await q.dmBetween.get(req.userId, targetId);
       if (existing) {
         conversationId = existing.id;
       } else {
-        const conv = q.insertConversation.run("dm", "", req.userId);
+        const conv = await q.insertConversation.run("dm", "", req.userId);
         conversationId = Number(conv.lastInsertRowid);
-        q.insertMember.run(conversationId, req.userId);
-        q.insertMember.run(conversationId, targetId);
-        q.insertMessage.run(conversationId, null, "system", "You matched! Say hello 👋", null);
-        await safeStream(() =>
+        await q.insertMember.run(conversationId, req.userId);
+        await q.insertMember.run(conversationId, targetId);
+        await q.insertMessage.run(conversationId, null, "system", "You matched! Say hello 👋", null);
+        await safeStream(async () =>
           syncChannel({
             conversationId,
             type: "dm",
             title: "",
-            members: q.membersOf.all(conversationId),
+            members: await q.membersOf.all(conversationId),
             createdById: req.userId,
           })
         );
@@ -1225,20 +1260,20 @@ app.post("/api/swipe", auth, async (req, res) => {
       }
     }
   }
-  res.json({ matched, conversationId, target: publicUser(targetId) });
+  res.json({ matched, conversationId, target: await publicUser(targetId) });
 });
 
-app.get("/api/matches", auth, (req, res) => {
-  const rows = db
+app.get("/api/matches", auth, async (req, res) => {
+  const rows = await db
     .prepare(
       `SELECT CASE WHEN user_a = ? THEN user_b ELSE user_a END AS other, created_at
        FROM matches WHERE user_a = ? OR user_b = ? ORDER BY id DESC`
     )
     .all(req.userId, req.userId, req.userId);
-  const matches = rows.map((r) => {
-    const dm = q.dmBetween.get(req.userId, r.other);
+  const matches = await mapAsync(rows, async (r) => {
+    const dm = await q.dmBetween.get(req.userId, r.other);
     return {
-      user: publicUser(r.other),
+      user: await publicUser(r.other),
       matchedAt: r.created_at,
       conversationId: dm ? dm.id : null,
     };
@@ -1251,16 +1286,16 @@ app.get("/api/matches", auth, (req, res) => {
 // ---------------------------------------------------------------------------
 
 // True when `conversationId` is a DM and either side has blocked the other.
-function isBlockedDm(conversationId, meId) {
-  const conv = q.convById.get(conversationId);
+async function isBlockedDm(conversationId, meId) {
+  const conv = await q.convById.get(conversationId);
   if (conv?.type !== "dm") return false;
-  const other = q.membersOf.all(conversationId).find((m) => m.user_id !== meId);
-  return !!other && !!q.isBlocked.get(meId, other.user_id, other.user_id, meId);
+  const other = (await q.membersOf.all(conversationId)).find((m) => m.user_id !== meId);
+  return !!other && !!await q.isBlocked.get(meId, other.user_id, other.user_id, meId);
 }
 
-function conversationView(conv, meId) {
-  const members = q.membersOf.all(conv.id);
-  const last = q.lastMessage.get(conv.id);
+async function conversationView(conv, meId) {
+  const members = await q.membersOf.all(conv.id);
+  const last = await q.lastMessage.get(conv.id);
   let title = conv.title;
   let emoji = conv.emoji || "💬";
   let color = conv.color || "#8a8aff";
@@ -1307,16 +1342,16 @@ function conversationView(conv, meId) {
   };
 }
 
-app.get("/api/conversations", auth, (req, res) => {
-  const rows = q.myConversations.all(req.userId);
-  const list = rows
-    .map((c) => conversationView(c, req.userId))
-    .filter((c) => {
+app.get("/api/conversations", auth, async (req, res) => {
+  const rows = await q.myConversations.all(req.userId);
+  const views = await mapAsync(rows, (c) => conversationView(c, req.userId));
+  const list = (
+    await filterAsync(views, async (c) => {
       if (c.type !== "dm") return true;
       const other = c.members.find((m) => m.id !== req.userId);
-      return !other || !q.isBlocked.get(req.userId, other.id, other.id, req.userId);
+      return !other || !(await q.isBlocked.get(req.userId, other.id, other.id, req.userId));
     })
-    .sort((a, b) => {
+  ).sort((a, b) => {
       // AI pinned first, then by recency of last message id-ish (keep DB order otherwise)
       if (a.type === "ai") return -1;
       if (b.type === "ai") return 1;
@@ -1325,12 +1360,12 @@ app.get("/api/conversations", auth, (req, res) => {
   res.json({ conversations: list });
 });
 
-app.get("/api/conversations/:id", auth, (req, res) => {
+app.get("/api/conversations/:id", auth, async (req, res) => {
   const id = Number(req.params.id);
-  const conv = q.convById.get(id);
-  if (!conv || !q.isMember.get(id, req.userId)) return res.status(403).json({ error: "not a member" });
-  if (isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
-  res.json({ conversation: conversationView(conv, req.userId) });
+  const conv = await q.convById.get(id);
+  if (!conv || !await q.isMember.get(id, req.userId)) return res.status(403).json({ error: "not a member" });
+  if (await isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
+  res.json({ conversation: await conversationView(conv, req.userId) });
 });
 
 app.post("/api/conversations/group", auth, async (req, res) => {
@@ -1338,62 +1373,62 @@ app.post("/api/conversations/group", auth, async (req, res) => {
   const memberIds = Array.isArray(req.body?.memberIds)
     ? [...new Set(req.body.memberIds.map(Number).filter(Boolean))]
     : [];
-  const conv = q.insertConversation.run("group", title, req.userId);
+  const conv = await q.insertConversation.run("group", title, req.userId);
   const id = Number(conv.lastInsertRowid);
-  q.insertMember.run(id, req.userId);
+  await q.insertMember.run(id, req.userId);
   for (const m of memberIds) {
-    if (m !== req.userId && q.userById.get(m)) q.insertMember.run(id, m);
+    if (m !== req.userId && await q.userById.get(m)) await q.insertMember.run(id, m);
   }
-  await safeStream(() =>
+  await safeStream(async () =>
     syncChannel({
       conversationId: id,
       type: "group",
       title,
-      members: q.membersOf.all(id),
+      members: await q.membersOf.all(id),
       createdById: req.userId,
     })
   );
-  await announce(id, `${publicUser(req.userId).displayName} started the group.`);
-  res.json({ conversation: conversationView(q.convById.get(id), req.userId) });
+  await announce(id, `${(await publicUser(req.userId)).displayName} started the group.`);
+  res.json({ conversation: await conversationView(await q.convById.get(id), req.userId) });
 });
 
 app.post("/api/conversations/:id/members", auth, async (req, res) => {
   const id = Number(req.params.id);
-  const conv = q.convById.get(id);
+  const conv = await q.convById.get(id);
   if (!conv || conv.type !== "group") return res.status(404).json({ error: "no group" });
-  if (!q.isMember.get(id, req.userId)) return res.status(403).json({ error: "not a member" });
+  if (!await q.isMember.get(id, req.userId)) return res.status(403).json({ error: "not a member" });
   const userId = Number(req.body?.userId);
-  if (!userId || !q.userById.get(userId)) return res.status(400).json({ error: "bad user" });
-  q.insertMember.run(id, userId);
-  const p = q.profileById.get(userId);
-  await safeStream(() => addChannelMember(id, q.membersOf.all(id).find((m) => m.user_id === userId)));
+  if (!userId || !await q.userById.get(userId)) return res.status(400).json({ error: "bad user" });
+  await q.insertMember.run(id, userId);
+  const p = await q.profileById.get(userId);
+  await safeStream(async () => addChannelMember(id, (await q.membersOf.all(id)).find((m) => m.user_id === userId)));
   await announce(id, `${p.display_name} was added.`);
-  res.json({ conversation: conversationView(q.convById.get(id), req.userId) });
+  res.json({ conversation: await conversationView(await q.convById.get(id), req.userId) });
 });
 
 app.post("/api/conversations/:id/leave", auth, async (req, res) => {
   const id = Number(req.params.id);
-  const conv = q.convById.get(id);
+  const conv = await q.convById.get(id);
   if (!conv || (conv.type !== "group" && conv.type !== "room")) {
     return res.status(400).json({ error: "can't leave this conversation" });
   }
-  if (!q.isMember.get(id, req.userId)) return res.status(403).json({ error: "not a member" });
-  const me = publicUser(req.userId);
-  q.removeMember.run(id, req.userId);
+  if (!await q.isMember.get(id, req.userId)) return res.status(403).json({ error: "not a member" });
+  const me = await publicUser(req.userId);
+  await q.removeMember.run(id, req.userId);
   await safeStream(() => removeChannelMember(id, req.userId));
-  if (q.memberCount.get(id).c > 0) {
+  if ((await q.memberCount.get(id)).c > 0) {
     await announce(id, `${me.displayName} left.`);
   }
   res.json({ ok: true });
 });
 
-app.get("/api/conversations/:id/messages", auth, (req, res) => {
+app.get("/api/conversations/:id/messages", auth, async (req, res) => {
   const id = Number(req.params.id);
-  if (!q.isMember.get(id, req.userId)) return res.status(403).json({ error: "not a member" });
-  if (isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
+  if (!await q.isMember.get(id, req.userId)) return res.status(403).json({ error: "not a member" });
+  if (await isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
   const after = Number(req.query.after || 0);
 
-  const reactionRows = q.reactionsByConv.all(id);
+  const reactionRows = await q.reactionsByConv.all(id);
   const reactionsByMessage = new Map();
   for (const r of reactionRows) {
     const list = reactionsByMessage.get(r.message_id) || [];
@@ -1405,7 +1440,7 @@ app.get("/api/conversations/:id/messages", auth, (req, res) => {
     reactionsByMessage.set(r.message_id, list);
   }
 
-  const messages = q.messagesAfter.all(id, after).map((m) => ({
+  const messages = (await q.messagesAfter.all(id, after)).map((m) => ({
     id: m.id,
     conversationId: m.conversation_id,
     senderId: m.sender_id,
@@ -1420,45 +1455,45 @@ app.get("/api/conversations/:id/messages", auth, (req, res) => {
     reactions: reactionsByMessage.get(m.id) || [],
   }));
 
-  const latest = q.lastMessage.get(id);
-  if (latest) q.upsertReadState.run(id, req.userId, latest.id);
+  const latest = await q.lastMessage.get(id);
+  if (latest) await q.upsertReadState.run(id, req.userId, latest.id);
 
   res.json({
     messages,
-    conversation: conversationView(q.convById.get(id), req.userId),
-    typing: typingNamesFor(id, req.userId),
-    reads: q.readStateAll.all(id),
+    conversation: await conversationView(await q.convById.get(id), req.userId),
+    typing: await typingNamesFor(id, req.userId),
+    reads: await q.readStateAll.all(id),
   });
 });
 
-app.post("/api/conversations/:id/typing", auth, (req, res) => {
+app.post("/api/conversations/:id/typing", auth, async (req, res) => {
   const id = Number(req.params.id);
-  if (!q.isMember.get(id, req.userId)) return res.status(403).json({ error: "not a member" });
-  if (isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
+  if (!await q.isMember.get(id, req.userId)) return res.status(403).json({ error: "not a member" });
+  if (await isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
   markTyping(id, req.userId);
   res.json({ ok: true });
 });
 
-app.post("/api/conversations/:id/messages/:messageId/react", auth, (req, res) => {
+app.post("/api/conversations/:id/messages/:messageId/react", auth, async (req, res) => {
   const id = Number(req.params.id);
   const messageId = Number(req.params.messageId);
-  if (!q.isMember.get(id, req.userId)) return res.status(403).json({ error: "not a member" });
-  if (isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
+  if (!await q.isMember.get(id, req.userId)) return res.status(403).json({ error: "not a member" });
+  if (await isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
   const emoji = String(req.body?.emoji || "");
   if (!REACTION_EMOJIS.includes(emoji)) return res.status(400).json({ error: "unknown reaction" });
 
-  if (q.hasReaction.get(id, messageId, req.userId, emoji)) {
-    q.removeReaction.run(id, messageId, req.userId, emoji);
+  if (await q.hasReaction.get(id, messageId, req.userId, emoji)) {
+    await q.removeReaction.run(id, messageId, req.userId, emoji);
   } else {
-    q.addReaction.run(id, messageId, req.userId, emoji);
+    await q.addReaction.run(id, messageId, req.userId, emoji);
   }
   const mine = new Set(
-    db
+    (await db
       .prepare("SELECT emoji FROM message_reactions WHERE conversation_id=? AND message_id=? AND user_id=?")
-      .all(id, messageId, req.userId)
+      .all(id, messageId, req.userId))
       .map((r) => r.emoji)
   );
-  const all = db
+  const all = await db
     .prepare(
       "SELECT emoji, COUNT(*) AS c FROM message_reactions WHERE conversation_id=? AND message_id=? GROUP BY emoji"
     )
@@ -1468,19 +1503,19 @@ app.post("/api/conversations/:id/messages/:messageId/react", auth, (req, res) =>
 
 app.post("/api/conversations/:id/messages", auth, async (req, res) => {
   const id = Number(req.params.id);
-  const conv = q.convById.get(id);
-  if (!conv || !q.isMember.get(id, req.userId))
+  const conv = await q.convById.get(id);
+  if (!conv || !await q.isMember.get(id, req.userId))
     return res.status(403).json({ error: "not a member" });
-  if (isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
+  if (await isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
   const body = String(req.body?.body || "").trim();
   if (!body) return res.status(400).json({ error: "empty message" });
   if (body.length > 4000) return res.status(400).json({ error: "message too long" });
 
-  const info = q.insertMessage.run(id, req.userId, "text", body, null);
+  const info = await q.insertMessage.run(id, req.userId, "text", body, null);
   const created = { id: Number(info.lastInsertRowid) };
 
   if (conv.type === "ai") {
-    const history = db
+    const history = await db
       .prepare(
         "SELECT kind, body FROM messages WHERE conversation_id = ? ORDER BY id ASC"
       )
@@ -1491,7 +1526,7 @@ app.post("/api/conversations/:id/messages", auth, async (req, res) => {
     } catch {
       reply = "My bow's a little tangled — try me again in a sec. 💘";
     }
-    q.insertMessage.run(id, null, "ai", reply, null);
+    await q.insertMessage.run(id, null, "ai", reply, null);
   }
 
   res.json({ ok: true, id: created.id });
@@ -1502,7 +1537,7 @@ app.post("/api/conversations/:id/messages", auth, async (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.get("/api/rooms", auth, async (req, res) => {
-  const convs = q.publicRoomsRanked.all();
+  const convs = await q.publicRoomsRanked.all();
   let live = {};
   if (isStreamConfigured()) {
     try {
@@ -1511,11 +1546,11 @@ app.get("/api/rooms", auth, async (req, res) => {
       console.warn("[stream] live room status failed:", err.message);
     }
   }
-  const rows = convs.map((c) => ({
-    ...conversationView(c, req.userId),
-    memberCount: q.memberCount.get(c.id).c,
-    amIMember: !!q.isMember.get(c.id, req.userId),
-    createdBy: c.created_by ? publicUser(c.created_by) : null,
+  const rows = await mapAsync(convs, async (c) => ({
+    ...(await conversationView(c, req.userId)),
+    memberCount: (await q.memberCount.get(c.id)).c,
+    amIMember: !!(await q.isMember.get(c.id, req.userId)),
+    createdBy: c.created_by ? await publicUser(c.created_by) : null,
     boosted: !!c.is_boosted,
     live: live[String(c.id)] || null,
   }));
@@ -1525,18 +1560,21 @@ app.get("/api/rooms", auth, async (req, res) => {
   res.json({ rooms: rows });
 });
 
-app.post("/api/rooms/:id/boost", auth, (req, res) => {
+app.post("/api/rooms/:id/boost", auth, async (req, res) => {
   const id = Number(req.params.id);
-  const conv = q.convById.get(id);
+  const conv = await q.convById.get(id);
   if (!conv || conv.type !== "room") return res.status(404).json({ error: "no such room" });
   if (conv.created_by !== req.userId) return res.status(403).json({ error: "only the host can boost this room" });
-  const me = q.profileById.get(req.userId);
+  const me = await q.profileById.get(req.userId);
   if (me.sparks < ROOM_BOOST_COST_SPARKS) {
     return res.status(400).json({ error: `Not enough sparks — boosting costs ${ROOM_BOOST_COST_SPARKS}.` });
   }
-  q.addSparks.run(-ROOM_BOOST_COST_SPARKS, req.userId);
-  q.extendRoomBoost.run(ROOM_BOOST_HOURS, id);
-  res.json({ room: { ...conversationView(q.convById.get(id), req.userId), memberCount: q.memberCount.get(id).c } });
+  // Atomic: two requests at once can't spend the same sparks twice.
+  if ((await q.spendSparks.run(ROOM_BOOST_COST_SPARKS, req.userId, ROOM_BOOST_COST_SPARKS)).changes === 0) {
+    return res.status(400).json({ error: "Not enough sparks." });
+  }
+  await q.extendRoomBoost.run(ROOM_BOOST_HOURS, id);
+  res.json({ room: { ...await conversationView(await q.convById.get(id), req.userId), memberCount: (await q.memberCount.get(id)).c } });
 });
 
 app.post("/api/rooms", auth, async (req, res) => {
@@ -1546,43 +1584,43 @@ app.post("/api/rooms", auth, async (req, res) => {
   const emoji = String(req.body?.emoji || "🌐").slice(0, 8) || "🌐";
   const color = String(req.body?.color || "#7d5fff");
 
-  const conv = q.insertRoom.run(title, topic, emoji, color, req.userId);
+  const conv = await q.insertRoom.run(title, topic, emoji, color, req.userId);
   const id = Number(conv.lastInsertRowid);
-  q.insertMember.run(id, req.userId);
-  await safeStream(() =>
+  await q.insertMember.run(id, req.userId);
+  await safeStream(async () =>
     syncChannel({
       conversationId: id,
       type: "room",
       title,
-      members: q.membersOf.all(id),
+      members: await q.membersOf.all(id),
       createdById: req.userId,
     })
   );
-  await announce(id, `${publicUser(req.userId).displayName} opened the room.`);
-  res.json({ room: { ...conversationView(q.convById.get(id), req.userId), memberCount: 1, amIMember: true } });
+  await announce(id, `${(await publicUser(req.userId)).displayName} opened the room.`);
+  res.json({ room: { ...await conversationView(await q.convById.get(id), req.userId), memberCount: 1, amIMember: true } });
 });
 
 app.post("/api/rooms/:id/join", auth, async (req, res) => {
   const id = Number(req.params.id);
-  const conv = q.convById.get(id);
+  const conv = await q.convById.get(id);
   if (!conv || conv.type !== "room") return res.status(404).json({ error: "no such room" });
-  if (q.isRoomBanned.get(id, req.userId)) {
+  if (await q.isRoomBanned.get(id, req.userId)) {
     return res.status(403).json({ error: "The host has removed you from this room." });
   }
 
-  if (!q.isMember.get(id, req.userId)) {
-    q.insertMember.run(id, req.userId);
-    const members = q.membersOf.all(id);
+  if (!await q.isMember.get(id, req.userId)) {
+    await q.insertMember.run(id, req.userId);
+    const members = await q.membersOf.all(id);
     await safeStream(() =>
       addChannelMember(id, members.find((m) => m.user_id === req.userId))
     );
     await safeStream(() => getOrCreateRoomCall(id, members, conv.created_by ?? req.userId));
-    await announce(id, `${publicUser(req.userId).displayName} joined the room.`);
+    await announce(id, `${(await publicUser(req.userId)).displayName} joined the room.`);
   }
   res.json({
     room: {
-      ...conversationView(q.convById.get(id), req.userId),
-      memberCount: q.memberCount.get(id).c,
+      ...await conversationView(await q.convById.get(id), req.userId),
+      memberCount: (await q.memberCount.get(id)).c,
       amIMember: true,
     },
   });
@@ -1595,7 +1633,7 @@ const ROOM_MOD_ACTIONS = new Set(["mute", "camOff", "spotlight", "unspotlight", 
 
 app.post("/api/rooms/:id/moderate", auth, async (req, res) => {
   const id = Number(req.params.id);
-  const conv = q.convById.get(id);
+  const conv = await q.convById.get(id);
   if (!conv || conv.type !== "room") return res.status(404).json({ error: "no such room" });
   if (conv.created_by !== req.userId) return res.status(403).json({ error: "only the host can do that" });
   const action = String(req.body?.action || "");
@@ -1616,10 +1654,10 @@ app.post("/api/rooms/:id/moderate", auth, async (req, res) => {
   }
 
   if (action === "ban") {
-    const target = publicUser(targetId);
-    q.addRoomBan.run(id, targetId, req.userId);
-    if (q.isMember.get(id, targetId)) {
-      q.removeMember.run(id, targetId);
+    const target = await publicUser(targetId);
+    await q.addRoomBan.run(id, targetId, req.userId);
+    if (await q.isMember.get(id, targetId)) {
+      await q.removeMember.run(id, targetId);
       await safeStream(() => removeChannelMember(id, targetId));
       if (target) await announce(id, `${target.displayName} was removed by the host.`);
     }
@@ -1646,12 +1684,12 @@ const liveQ = {
   end: db.prepare("UPDATE live_streams SET status='ended', ended_at=datetime('now') WHERE id=? AND status='live'"),
   addGiftSparks: db.prepare("UPDATE live_streams SET gift_sparks = gift_sparks + ? WHERE id=?"),
   cohosts: db.prepare("SELECT user_id FROM live_cohosts WHERE stream_id=? ORDER BY added_at"),
-  addCohost: db.prepare("INSERT OR IGNORE INTO live_cohosts (stream_id, user_id) VALUES (?, ?)"),
+  addCohost: db.prepare("INSERT INTO live_cohosts (stream_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING"),
   removeCohost: db.prepare("DELETE FROM live_cohosts WHERE stream_id=? AND user_id=?"),
 };
 
-function liveView(row, viewerId, counts = {}) {
-  const cohostIds = liveQ.cohosts.all(row.id).map((r) => r.user_id);
+async function liveView(row, viewerId, counts = {}) {
+  const cohostIds = (await liveQ.cohosts.all(row.id)).map((r) => r.user_id);
   const c = counts[String(row.id)];
   return {
     id: row.id,
@@ -1661,8 +1699,8 @@ function liveView(row, viewerId, counts = {}) {
     startedAt: row.started_at,
     endedAt: row.ended_at,
     giftSparks: row.gift_sparks,
-    host: publicUser(row.host_id),
-    cohosts: cohostIds.map(publicUser).filter(Boolean),
+    host: await publicUser(row.host_id),
+    cohosts: (await mapAsync(cohostIds, (id) => publicUser(id))).filter(Boolean),
     viewers: c?.viewers ?? null,
     onAir: c ? c.isLive : null,
     isHost: row.host_id === viewerId,
@@ -1673,12 +1711,12 @@ function liveView(row, viewerId, counts = {}) {
   };
 }
 
-function hostBlocksViewer(row, viewerId) {
-  return !!q.isBlocked.get(row.host_id, viewerId, viewerId, row.host_id);
+async function hostBlocksViewer(row, viewerId) {
+  return !!await q.isBlocked.get(row.host_id, viewerId, viewerId, row.host_id);
 }
 
 app.get("/api/live", auth, async (req, res) => {
-  const rows = liveQ.active.all().filter((r) => !hostBlocksViewer(r, req.userId));
+  const rows = await filterAsync(await liveQ.active.all(), async (r) => !(await hostBlocksViewer(r, req.userId)));
   let counts = {};
   if (isStreamConfigured()) {
     try {
@@ -1687,7 +1725,7 @@ app.get("/api/live", auth, async (req, res) => {
       console.warn("[stream] live viewer counts failed:", err.message);
     }
   }
-  const streams = rows.map((r) => liveView(r, req.userId, counts));
+  const streams = await mapAsync(rows, (r) => liveView(r, req.userId, counts));
   streams.sort((a, b) => (b.viewers ?? 0) - (a.viewers ?? 0));
   res.json({ streams, categories: LIVE_CATEGORIES, videoConfigured: isStreamConfigured() });
 });
@@ -1702,37 +1740,37 @@ app.post("/api/live", auth, async (req, res) => {
   if (!title) return res.status(400).json({ error: "give your stream a title" });
 
   // One broadcast per host: starting a new one ends the old one.
-  for (const old of [liveQ.liveByHost.get(req.userId)].filter(Boolean)) {
-    liveQ.end.run(old.id);
+  for (const old of [await liveQ.liveByHost.get(req.userId)].filter(Boolean)) {
+    await liveQ.end.run(old.id);
     await safeStream(() => endLiveCall(old.id));
   }
 
   const category = LIVE_CATEGORIES.includes(req.body?.category) ? req.body.category : "Social";
-  const id = Number(liveQ.insert.run(req.userId, title, category).lastInsertRowid);
+  const id = Number((await liveQ.insert.run(req.userId, title, category)).lastInsertRowid);
   try {
-    await createLiveCall(id, publicUser(req.userId), title);
+    await createLiveCall(id, await publicUser(req.userId), title);
     await ensureLiveChannel(id, title);
   } catch (err) {
-    liveQ.end.run(id);
+    await liveQ.end.run(id);
     return res.status(502).json({ error: `Couldn't start the stream: ${err.message}` });
   }
-  res.json({ stream: liveView(liveQ.byId.get(id), req.userId) });
+  res.json({ stream: await liveView(await liveQ.byId.get(id), req.userId) });
 });
 
-app.get("/api/live/:id", auth, (req, res) => {
-  const row = liveQ.byId.get(Number(req.params.id));
-  if (!row || hostBlocksViewer(row, req.userId)) return res.status(404).json({ error: "That stream isn't available." });
-  res.json({ stream: liveView(row, req.userId) });
+app.get("/api/live/:id", auth, async (req, res) => {
+  const row = await liveQ.byId.get(Number(req.params.id));
+  if (!row || await hostBlocksViewer(row, req.userId)) return res.status(404).json({ error: "That stream isn't available." });
+  res.json({ stream: await liveView(row, req.userId) });
 });
 
 app.post("/api/live/:id/cohosts", auth, async (req, res) => {
-  const row = liveQ.byId.get(Number(req.params.id));
+  const row = await liveQ.byId.get(Number(req.params.id));
   if (!row || row.status !== "live") return res.status(404).json({ error: "That stream has ended." });
   if (row.host_id !== req.userId) return res.status(403).json({ error: "only the host can invite co-hosts" });
   const targetId = Number(req.body?.userId);
-  const target = targetId && targetId !== req.userId ? publicUser(targetId) : null;
-  if (!target || hostBlocksViewer(row, targetId)) return res.status(400).json({ error: "pick someone else" });
-  if (liveQ.cohosts.all(row.id).length >= MAX_LIVE_COHOSTS) {
+  const target = targetId && targetId !== req.userId ? await publicUser(targetId) : null;
+  if (!target || await hostBlocksViewer(row, targetId)) return res.status(400).json({ error: "pick someone else" });
+  if ((await liveQ.cohosts.all(row.id)).length >= MAX_LIVE_COHOSTS) {
     return res.status(400).json({ error: `Up to ${MAX_LIVE_COHOSTS} co-hosts per stream.` });
   }
   try {
@@ -1740,65 +1778,68 @@ app.post("/api/live/:id/cohosts", auth, async (req, res) => {
   } catch (err) {
     return res.status(502).json({ error: err.message });
   }
-  liveQ.addCohost.run(row.id, targetId);
+  await liveQ.addCohost.run(row.id, targetId);
   await safeStream(() => sendLiveSystemMessage(row.id, `${target.displayName} is now co-hosting.`));
-  res.json({ stream: liveView(liveQ.byId.get(row.id), req.userId) });
+  res.json({ stream: await liveView(await liveQ.byId.get(row.id), req.userId) });
 });
 
 // The host removes a co-host, or a co-host steps down themselves.
 app.delete("/api/live/:id/cohosts/:userId", auth, async (req, res) => {
-  const row = liveQ.byId.get(Number(req.params.id));
+  const row = await liveQ.byId.get(Number(req.params.id));
   if (!row) return res.status(404).json({ error: "no such stream" });
   const targetId = Number(req.params.userId);
   if (row.host_id !== req.userId && targetId !== req.userId) {
     return res.status(403).json({ error: "only the host can do that" });
   }
-  liveQ.removeCohost.run(row.id, targetId);
-  const target = publicUser(targetId);
+  await liveQ.removeCohost.run(row.id, targetId);
+  const target = await publicUser(targetId);
   if (target && row.status === "live") {
     await safeStream(() => setLiveCohost(row.id, target, false));
   }
-  res.json({ stream: liveView(liveQ.byId.get(row.id), req.userId) });
+  res.json({ stream: await liveView(await liveQ.byId.get(row.id), req.userId) });
 });
 
 app.post("/api/live/:id/end", auth, async (req, res) => {
-  const row = liveQ.byId.get(Number(req.params.id));
+  const row = await liveQ.byId.get(Number(req.params.id));
   if (!row) return res.status(404).json({ error: "no such stream" });
   if (row.host_id !== req.userId) return res.status(403).json({ error: "only the host can end the stream" });
-  liveQ.end.run(row.id);
+  await liveQ.end.run(row.id);
   await safeStream(() => sendLiveSystemMessage(row.id, "The stream has ended. Thanks for watching!"));
   await safeStream(() => endLiveCall(row.id));
   await safeStream(() => freezeLiveChannel(row.id));
-  res.json({ stream: liveView(liveQ.byId.get(row.id), req.userId) });
+  res.json({ stream: await liveView(await liveQ.byId.get(row.id), req.userId) });
 });
 
 // Gifts on a live stream go to the host or one of the co-hosts. Same sparks
 // rules as gifts in chat: the sender spends, nothing is minted.
 app.post("/api/live/:id/gift", auth, async (req, res) => {
-  const row = liveQ.byId.get(Number(req.params.id));
+  const row = await liveQ.byId.get(Number(req.params.id));
   if (!row || row.status !== "live") return res.status(404).json({ error: "That stream has ended." });
   const gift = GIFT_BY_KEY[String(req.body?.giftKey || "")];
   if (!gift) return res.status(400).json({ error: "unknown gift" });
   const recipientId = Number(req.body?.recipientId) || row.host_id;
-  const onStage = [row.host_id, ...liveQ.cohosts.all(row.id).map((r) => r.user_id)];
+  const onStage = [row.host_id, ...(await liveQ.cohosts.all(row.id)).map((r) => r.user_id)];
   if (!onStage.includes(recipientId)) return res.status(400).json({ error: "gifts go to the host or a co-host" });
   if (recipientId === req.userId) return res.status(400).json({ error: "you can't gift yourself" });
-  if (q.isBlocked.get(req.userId, recipientId, recipientId, req.userId)) {
+  if (await q.isBlocked.get(req.userId, recipientId, recipientId, req.userId)) {
     return res.status(403).json({ error: "unavailable" });
   }
-  const me = q.profileById.get(req.userId);
+  const me = await q.profileById.get(req.userId);
   if (me.sparks < gift.cost) {
     return res.status(400).json({ error: `Not enough sparks — ${gift.name} costs ${gift.cost}.` });
   }
-  q.addSparks.run(-gift.cost, req.userId);
-  q.insertGift.run(req.userId, recipientId, gift.key, null);
-  liveQ.addGiftSparks.run(gift.cost, row.id);
-  const from = publicUser(req.userId).displayName;
-  const to = publicUser(recipientId).displayName;
+  // Atomic: two requests at once can't spend the same sparks twice.
+  if ((await q.spendSparks.run(gift.cost, req.userId, gift.cost)).changes === 0) {
+    return res.status(400).json({ error: "Not enough sparks." });
+  }
+  await q.insertGift.run(req.userId, recipientId, gift.key, null);
+  await liveQ.addGiftSparks.run(gift.cost, row.id);
+  const from = (await publicUser(req.userId)).displayName;
+  const to = (await publicUser(recipientId)).displayName;
   await safeStream(() =>
     sendLiveSystemMessage(row.id, `${from} sent ${gift.emoji} ${gift.name} to ${to}`, { messageKind: "gift", gift })
   );
-  res.json({ ok: true, sparks: q.profileById.get(req.userId).sparks, gift });
+  res.json({ ok: true, sparks: (await q.profileById.get(req.userId)).sparks, gift });
 });
 
 // ---------------------------------------------------------------------------
@@ -1812,7 +1853,7 @@ app.get("/api/stream/credentials", auth, async (req, res) => {
         "Stream isn't configured yet. Add STREAM_API_KEY and STREAM_API_SECRET to a .env file (free at https://dashboard.getstream.io).",
     });
   }
-  const creds = await streamCredentialsFor(publicUser(req.userId));
+  const creds = await streamCredentialsFor(await publicUser(req.userId));
   res.json(creds);
 });
 
@@ -1824,15 +1865,15 @@ app.post("/api/conversations/:id/call", auth, async (req, res) => {
     });
   }
   const id = Number(req.params.id);
-  const conv = q.convById.get(id);
-  if (!conv || !q.isMember.get(id, req.userId)) {
+  const conv = await q.convById.get(id);
+  if (!conv || !await q.isMember.get(id, req.userId)) {
     return res.status(403).json({ error: "not a member" });
   }
-  if (isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
+  if (await isBlockedDm(id, req.userId)) return res.status(403).json({ error: "This chat is unavailable." });
   if (conv.type === "ai") {
     return res.status(400).json({ error: "Cupid doesn't do video calls (yet)" });
   }
-  const members = q.membersOf.all(id);
+  const members = await q.membersOf.all(id);
   const call = await getOrCreateRoomCall(id, members, req.userId);
   res.json(call);
 });
@@ -1912,9 +1953,9 @@ app.use((err, req, res, next) => {
 // have no Stream channel, or an empty one, so members can't read them.
 // Reconcile every non-AI conversation once at startup; idempotent.
 async function backfillStreamChannels() {
-  const convs = db.prepare("SELECT * FROM conversations WHERE type != 'ai'").all();
+  const convs = await db.prepare("SELECT * FROM conversations WHERE type != 'ai'").all();
   for (const conv of convs) {
-    const members = q.membersOf.all(conv.id);
+    const members = await q.membersOf.all(conv.id);
     if (!members.length) continue;
     await safeStream(() =>
       syncChannel({
@@ -1929,10 +1970,10 @@ async function backfillStreamChannels() {
   console.log(`[stream] synced ${convs.length} conversation channel(s)`);
 }
 
-q.deleteExpiredSessions.run(SESSION_DAYS);
-setInterval(() => q.deleteExpiredSessions.run(SESSION_DAYS), 6 * 60 * 60 * 1000).unref();
+await q.deleteExpiredSessions.run(SESSION_DAYS);
+setInterval(() => q.deleteExpiredSessions.run(SESSION_DAYS).catch((err) => console.error(err)), 6 * 60 * 60 * 1000).unref();
 
 app.listen(PORT, () => {
   console.log(`Cupid's Corner API on http://localhost:${PORT}`);
-  if (isStreamConfigured()) backfillStreamChannels();
+  if (isStreamConfigured()) backfillStreamChannels().catch((err) => console.error(err));
 });

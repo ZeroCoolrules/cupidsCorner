@@ -73,6 +73,24 @@ see or match.
   `primaryColor`, `accentColor`, `supportEmail`, `active`).
 - A brand's domain (and `www.` of it) is allowed for CORS automatically.
 
+## Database: SQLite or Postgres
+
+The server runs on SQLite by default (`DB_PATH`). Set `DATABASE_URL` to a
+Postgres connection string (a Supabase project works) and it runs on Postgres
+instead, which is what several branded sites should share. The same queries
+run on both; `server/db.js` translates them.
+
+Switching a live site over, once:
+
+1. Create the Postgres database (Supabase: New project, then Connect,
+   then copy the "Session pooler" connection string).
+2. In the Render shell: `cd server && DATABASE_URL='<that string>' npm run copy:sqlite-to-postgres`.
+   It copies every member, chat, match and gift from the SQLite file into
+   the empty Postgres database in one transaction. Photos stay on the disk.
+3. Add `DATABASE_URL` in Render's Environment and redeploy.
+
+To undo, remove `DATABASE_URL` and redeploy: the SQLite file is untouched.
+
 ## Stack
 
 - **Backend** — Node + Express, SQLite via the built-in `node:sqlite` module (no native build step). Token sessions, bcrypt password hashing.
