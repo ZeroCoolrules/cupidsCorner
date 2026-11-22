@@ -323,6 +323,11 @@ export default function Chat() {
             🎥
           </button>
         )}
+        {isAI && (
+          <button className="video-btn" onClick={() => nav("/coach")} title="Talk to Cupid by phone">
+            📞
+          </button>
+        )}
       </header>
 
       <div className="messages">

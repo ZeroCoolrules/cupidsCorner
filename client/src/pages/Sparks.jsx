@@ -51,7 +51,7 @@ export default function Sparks() {
       <div className="card profile-preview" style={{ marginBottom: 16 }}>
         <div style={{ flex: 1 }}>
           <div className="chat-title">Your balance</div>
-          <div className="muted sm">Sparks buy gifts, room boosts, and Premium.</div>
+          <div className="muted sm">Sparks buy gifts, room boosts, Premium and coach sessions.</div>
         </div>
         <div className="sparks-pill" style={{ fontSize: 16 }}>
           ✨ {user.sparks}

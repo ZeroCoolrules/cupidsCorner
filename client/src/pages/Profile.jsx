@@ -150,6 +150,10 @@ export default function Profile() {
             Buy sparks
           </Link>
           <br />
+          <Link to="/coach" className="profile-link">
+            Talk to Cupid
+          </Link>
+          <br />
           <Link to={`/u/${user.id}`} className="profile-link">
             Public view
           </Link>
