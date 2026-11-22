@@ -51,6 +51,17 @@ import { parseProfiles, compatibility } from "./compat.js";
 import { COMPAT_ROUTE, isX402Configured, x402Gate } from "./x402.js";
 import { DATE_SCENARIOS, scoreDate, verdictFor } from "./virtualDates.js";
 import { scoreCandidate, matchPercent } from "./matching.js";
+import {
+  initBrands,
+  brandMiddleware,
+  brandOrigins,
+  publicBrand,
+  listBrands,
+  brandInput,
+  createBrand,
+  updateBrand,
+  DEFAULT_BRAND_SLUG,
+} from "./brands.js";
 
 export const REACTION_EMOJIS = ["❤️", "😂", "👍", "😮", "😢"];
 
@@ -121,14 +132,26 @@ const reportLimiter = rateLimit({
 });
 
 initDb();
+initBrands();
 
 const app = express();
 // Render terminates TLS in front of us; trust it so req.protocol is "https"
 // (x402 builds the 402 `resource.url` from it).
 app.set("trust proxy", 1);
+// Versioned API for separate front ends (the new web site, partner sites):
+// /api/v1/... is the same API as /api/..., so the bundled client keeps
+// working unchanged while outside sites pin to v1.
+app.use((req, res, next) => {
+  if (req.url === "/api/v1" || req.url.startsWith("/api/v1/") || req.url.startsWith("/api/v1?")) {
+    req.url = "/api" + req.url.slice("/api/v1".length);
+  }
+  next();
+});
 app.use(
   cors({
-    origin: (origin, cb) => cb(null, !origin || ALLOWED_ORIGINS.includes(origin)),
+    // Brand domains (see server/brands.js) are allowed alongside ALLOWED_ORIGINS.
+    origin: (origin, cb) =>
+      cb(null, !origin || ALLOWED_ORIGINS.includes(origin) || brandOrigins().includes(origin)),
   })
 );
 // Basic hardening headers. The React client loads Stream and Stripe from
@@ -164,6 +187,7 @@ app.post("/api/billing/webhook", express.raw({ type: "application/json" }), (req
 });
 
 app.use(express.json());
+app.use(brandMiddleware);
 app.use("/uploads", express.static(uploadsDir));
 
 const upload = multer({
@@ -235,6 +259,7 @@ const q = {
     "SELECT u.* FROM users u JOIN datingpro_links d ON d.user_id = u.id WHERE d.pg_email = ?"
   ),
   userById: db.prepare("SELECT * FROM users WHERE id = ?"),
+  setUserBrand: db.prepare("UPDATE users SET brand_id = ? WHERE id = ?"),
   insertUser: db.prepare(
     "INSERT INTO users (username, password_hash) VALUES (?, ?)"
   ),
@@ -538,7 +563,18 @@ app.get("/healthz", (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.get("/api/public/config", (req, res) => {
-  res.json({ supportEmail: SUPPORT_EMAIL, demoMode: DEMO_MODE, minAge: MIN_AGE });
+  res.json({
+    supportEmail: req.brand.support_email || SUPPORT_EMAIL,
+    demoMode: DEMO_MODE,
+    minAge: MIN_AGE,
+    brand: publicBrand(req.brand),
+  });
+});
+
+// The brand this request was matched to (X-Brand header or Host), so a front
+// end can theme itself.
+app.get("/api/public/brand", (req, res) => {
+  res.json(publicBrand(req.brand));
 });
 
 app.get("/api/public/stats", (req, res) => {
@@ -592,6 +628,7 @@ app.post("/api/auth/signup", authLimiter, (req, res) => {
   const hash = bcrypt.hashSync(String(password), 10);
   const info = q.insertUser.run(String(username).trim(), hash);
   const userId = Number(info.lastInsertRowid);
+  q.setUserBrand.run(req.brand.id, userId);
   q.acceptTerms.run(userId);
   q.insertProfile.run({
     user_id: userId,
@@ -978,6 +1015,49 @@ app.post("/api/admin/users/:id/ban", auth, adminOnly, (req, res) => {
   q.deleteUserSessions.run(id);
   q.resolveReportsFor.run("banned", id);
   res.json({ ok: true });
+});
+
+// ---- brands (white-label sites) ---------------------------------------------
+
+app.get("/api/admin/brands", auth, adminOnly, (req, res) => {
+  const counts = Object.fromEntries(
+    db.prepare("SELECT brand_id, COUNT(*) c FROM users GROUP BY brand_id").all().map((r) => [r.brand_id, r.c])
+  );
+  res.json(listBrands().map((b) => ({ ...publicBrand(b), active: !!b.active, members: counts[b.id] || 0 })));
+});
+
+function brandWriteError(res, err) {
+  if (String(err?.message || "").includes("UNIQUE")) {
+    return res.status(409).json({ error: "That slug or domain is already used by another brand" });
+  }
+  throw err;
+}
+
+app.post("/api/admin/brands", auth, adminOnly, (req, res) => {
+  const { error, values } = brandInput(req.body, { creating: true });
+  if (error) return res.status(400).json({ error });
+  try {
+    res.status(201).json(publicBrand(createBrand(values)));
+  } catch (err) {
+    brandWriteError(res, err);
+  }
+});
+
+app.put("/api/admin/brands/:slug", auth, adminOnly, (req, res) => {
+  const slug = String(req.params.slug).toLowerCase();
+  if (!db.prepare("SELECT 1 FROM brands WHERE slug = ?").get(slug)) {
+    return res.status(404).json({ error: "no such brand" });
+  }
+  const { error, values } = brandInput(req.body, { creating: false });
+  if (error) return res.status(400).json({ error });
+  if (slug === DEFAULT_BRAND_SLUG && (values.slug && values.slug !== slug || values.active === 0)) {
+    return res.status(400).json({ error: "The default brand can't be renamed or switched off" });
+  }
+  try {
+    res.json(publicBrand(updateBrand(slug, values)));
+  } catch (err) {
+    brandWriteError(res, err);
+  }
 });
 
 app.post("/api/admin/verifications/:id/decision", auth, adminOnly, (req, res) => {
