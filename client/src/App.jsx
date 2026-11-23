@@ -19,11 +19,21 @@ import VirtualDate from "./pages/VirtualDate.jsx";
 import AdminVerifications from "./pages/AdminVerifications.jsx";
 import AdminReports from "./pages/AdminReports.jsx";
 import Legal from "./pages/Legal.jsx";
+import Feed from "./pages/Feed.jsx";
+import Blog from "./pages/Blog.jsx";
+import BlogPost from "./pages/BlogPost.jsx";
+import BlogEditor from "./pages/BlogEditor.jsx";
 
 const legalRoutes = [
   <Route key="terms" path="/terms" element={<Legal doc="terms" />} />,
   <Route key="privacy" path="/privacy" element={<Legal doc="privacy" />} />,
   <Route key="guidelines" path="/guidelines" element={<Legal doc="guidelines" />} />,
+];
+
+// The blog is public: readable signed out, so articles can be shared.
+const blogRoutes = [
+  <Route key="blog" path="/blog" element={<Blog />} />,
+  <Route key="blog-post" path="/blog/:slug" element={<BlogPost />} />,
 ];
 
 function Shell({ children }) {
@@ -38,6 +48,7 @@ function Shell({ children }) {
       {!hideNav && (
         <nav className="tabbar">
           <Tab to="/discover" icon="🔥" label="Discover" />
+          <Tab to="/feed" icon="📰" label="Feed" />
           <Tab to="/live" icon="📡" label="Live" />
           <Tab to="/rooms" icon="🌐" label="Rooms" />
           <Tab to="/matches" icon="💞" label="Matches" />
@@ -66,11 +77,13 @@ function TopNav() {
       </NavLink>
       <nav className="topnav-links">
         <NavLink to="/discover" className={link}>🔥 Discover</NavLink>
+        <NavLink to="/feed" className={link}>📰 Feed</NavLink>
         <NavLink to="/live" className={link}>📡 Live</NavLink>
         <NavLink to="/rooms" className={link}>🌐 Rooms</NavLink>
         <NavLink to="/matches" className={link}>💞 Matches</NavLink>
         <NavLink to="/chats" className={link}>💬 Chats</NavLink>
         <NavLink to="/coach" className={link}>📞 Coach</NavLink>
+        <NavLink to="/blog" className={link}>✍️ Blog</NavLink>
       </nav>
       <div className="topnav-right">
         <NavLink to="/sparks" className="sparks-pill">✨ {user?.sparks ?? 0}</NavLink>
@@ -120,6 +133,7 @@ export default function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             {legalRoutes}
+            {blogRoutes}
             <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
         </div>
@@ -146,6 +160,10 @@ export default function App() {
         <Route path="/date/:userId" element={<VirtualDate />} />
         <Route path="/admin/verifications" element={<AdminVerifications />} />
         <Route path="/admin/reports" element={<AdminReports />} />
+        <Route path="/feed" element={<Feed />} />
+        <Route path="/blog/write" element={<BlogEditor />} />
+        <Route path="/blog/write/:id" element={<BlogEditor />} />
+        {blogRoutes}
         {legalRoutes}
         <Route path="*" element={<Navigate to="/discover" replace />} />
       </Routes>

@@ -63,6 +63,7 @@ import {
   DEFAULT_BRAND_SLUG,
 } from "./brands.js";
 import { initCoach, registerCoachRoutes } from "./coach.js";
+import { initSocial, registerSocialRoutes, feedPhotosOf } from "./social.js";
 
 // Array helpers for async callbacks (DB calls are async).
 const mapAsync = (arr, fn) => Promise.all(arr.map(fn));
@@ -142,6 +143,7 @@ const reportLimiter = rateLimit({
 await initDb();
 await initBrands();
 await initCoach();
+await initSocial();
 
 const app = express();
 // Route handlers are async (the database is); pass their errors to the
@@ -780,6 +782,9 @@ app.delete("/api/me", auth, async (req, res) => {
   if (profile?.photo_url) fs.unlink(path.join(uploadsDir, path.basename(profile.photo_url)), () => {});
   for (const v of await q.verificationsFor.all(req.userId)) {
     fs.unlink(path.join(verificationsDir, path.basename(v.selfie_file)), () => {});
+  }
+  for (const url of await feedPhotosOf(req.userId)) {
+    fs.unlink(path.join(uploadsDir, path.basename(url)), () => {});
   }
   await q.deleteUser.run(req.userId);
   res.json({ ok: true });
@@ -1915,6 +1920,12 @@ app.post("/api/billing/checkout", auth, async (req, res) => {
 // ---------------------------------------------------------------------------
 
 registerCoachRoutes(app, { auth, q, rateLimit });
+
+// ---------------------------------------------------------------------------
+// member feed and public blog (see social.js)
+// ---------------------------------------------------------------------------
+
+registerSocialRoutes(app, { auth, adminOnly, isAdmin, q, rateLimit, upload, uploadsDir });
 
 // ---------------------------------------------------------------------------
 // paid API (x402): pay-per-call compatibility scoring

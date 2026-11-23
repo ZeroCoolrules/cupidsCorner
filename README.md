@@ -41,6 +41,14 @@ The 📡 Live tab, built from the Social Streaming Rooms idea and DatingPro's li
 - **Share.** The share sheet offers the phone's share menu, plus X, Facebook, WhatsApp, Telegram and copy link.
 - Each host can run one stream at a time. Starting a new one ends the old one. When the host ends a stream, its chat is frozen.
 
+## Feed and blog
+
+**Feed** (`/feed`): members post a short update with an optional photo, and others like and comment. Blocks and bans apply as everywhere else, so you never see posts or comments from someone you blocked, who blocked you, or who is banned. Members delete their own posts; the post's author can remove comments under it; admins can remove anything. Reporting a post files a normal report against its author, so it shows up in the admin Reports queue.
+
+**Blog** (`/blog`): articles written by admins (`ADMIN_USERNAMES`). Published articles are public with no sign-in, so they can be shared. Admins get a "Write an article" button on the blog page: title, summary, text with simple formatting (`## heading`, `- bullet`, `> quote`, `**bold**`, `*italic*`, `[text](https://link)`), a cover photo, and Save draft / Publish / Unpublish. Article text is rendered as plain elements, never as raw HTML.
+
+API: `GET/POST /api/feed`, `DELETE /api/feed/:id`, `POST/DELETE /api/feed/:id/like`, `GET/POST /api/feed/:id/comments`, `DELETE /api/feed/comments/:id`, `POST /api/feed/:id/report`; public `GET /api/blog` and `GET /api/blog/:slug`; admin `GET/POST /api/admin/blog`, `GET/PUT/DELETE /api/admin/blog/:id`, `POST/DELETE /api/admin/blog/:id/cover`. All of it is also under `/api/v1`, so brand sites can show the same feed and blog. Code is in `server/social.js`; tables `feed_posts`, `feed_likes`, `feed_comments`, `blog_posts` are created at startup on SQLite and Postgres alike. Feed photos and blog covers are stored in `UPLOADS_DIR` with profile photos.
+
 ## DatingPro bridge
 
 This brings members of a PG Dating Pro site (the `pg_*` tables, e.g. Cupid's Point) into cupidsCorner. They sign in with their **DatingPro email (or nickname) and their existing password**. Dating Pro stores bcrypt hashes, and the import copies them as they are.
