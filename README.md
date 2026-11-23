@@ -93,6 +93,8 @@ POST /api/v1/coach/agent/verify   { "code": "123456" }
 POST /api/v1/coach/agent/end      { "code": "123456" }   optional, closes the session when the call ends
 ```
 
+The agent that answers the line lives in [`voice-agent/`](voice-agent/README.md): a LiveKit agent that asks for the code, checks it with the calls above and runs the timed session.
+
 Members use `GET /api/coach` (price, balance, and their session if they have paid) and `POST /api/coach/sessions` (pay). See `server/coach.js`.
 
 ## Database: SQLite or Postgres
