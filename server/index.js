@@ -66,6 +66,7 @@ import { initCoach, registerCoachRoutes } from "./coach.js";
 import { initSocial, registerSocialRoutes, feedPhotosOf } from "./social.js";
 import { initExtras, registerExtrasRoutes, albumPhotosOf, trackAvatar, applyReferral } from "./extras.js";
 import { initMeetups, registerMeetupRoutes } from "./meetups.js";
+import { initCampaigns, registerCampaignRoutes, applyCampaign } from "./campaigns.js";
 
 // Array helpers for async callbacks (DB calls are async).
 const mapAsync = (arr, fn) => Promise.all(arr.map(fn));
@@ -148,6 +149,7 @@ await initCoach();
 await initSocial();
 await initExtras();
 await initMeetups();
+await initCampaigns();
 
 const app = express();
 // Route handlers are async (the database is); pass their errors to the
@@ -680,10 +682,12 @@ app.post("/api/auth/signup", authLimiter, async (req, res) => {
   await ensureAiConversation(userId);
   // An invite code is optional and never blocks a sign-up.
   const welcomeSparks = await applyReferral(userId, req.body?.referralCode, { q });
+  // So is the launch campaign (the state page) they joined through.
+  const campaign = await applyCampaign(userId, req.body?.campaign, { q });
 
   const token = crypto.randomBytes(24).toString("hex");
   await q.insertSession.run(token, userId);
-  res.json({ token, user: await publicUser(userId), welcomeSparks });
+  res.json({ token, user: await publicUser(userId), welcomeSparks, campaign });
 });
 
 app.post("/api/auth/login", authLimiter, async (req, res) => {
@@ -1958,6 +1962,7 @@ async function openDm(aId, bId, systemText) {
 
 registerExtrasRoutes(app, { auth, adminOnly, q, rateLimit, upload, uploadsDir, publicUser });
 registerMeetupRoutes(app, { auth, q, rateLimit, publicUser, openDm });
+registerCampaignRoutes(app, { auth, adminOnly });
 
 // ---------------------------------------------------------------------------
 // paid API (x402): pay-per-call compatibility scoring
