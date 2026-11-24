@@ -100,7 +100,7 @@ const MIN_AGE = 18;
 const MIN_PASSWORD = 8;
 const SESSION_DAYS = 30;
 // Public contact for support, privacy and safety requests (shown in Terms/Privacy).
-const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "";
+const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "support@dreamcadian.com";
 // Shows the demo-account hint on the login page. Leave off in production.
 const DEMO_MODE = process.env.DEMO_MODE === "1";
 // Comma-separated origins allowed to call the API cross-origin. The client is
@@ -606,6 +606,10 @@ app.get("/api/public/config", (req, res) => {
     supportEmail: req.brand.support_email || SUPPORT_EMAIL,
     demoMode: DEMO_MODE,
     minAge: MIN_AGE,
+    // Who runs the service, for the legal pages (all optional).
+    legalName: process.env.LEGAL_NAME || "Dreamcadian LLC",
+    legalAddress: process.env.LEGAL_ADDRESS || "4124 Carrolton Court, Apt A, Bridgeton, MO 63044",
+    governingState: process.env.GOVERNING_STATE || "Missouri",
     brand: publicBrand(req.brand),
   });
 });

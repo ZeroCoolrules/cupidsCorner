@@ -3,6 +3,7 @@ import { useAuth } from "../auth.jsx";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import { usePublicConfig } from "../lib/config.js";
+import SafetyNotice from "../components/SafetyNotice.jsx";
 
 const FEATURES = [
   { icon: "🔥", title: "Discover & match", body: "Swipe, match, and start talking." },
@@ -220,8 +221,10 @@ export default function Login() {
         )}
       </form>
 
+      {mode === "signup" && <SafetyNotice full />}
+
       <p className="legal-links muted sm">
-        <Link to="/terms">Terms</Link> · <Link to="/privacy">Privacy</Link> · <Link to="/guidelines">Community Guidelines</Link>
+        <Link to="/terms">Terms</Link> · <Link to="/privacy">Privacy</Link> · <Link to="/guidelines">Community Guidelines</Link> · <Link to="/safety">Safety</Link>
       </p>
     </div>
   );
