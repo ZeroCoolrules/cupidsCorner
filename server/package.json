@@ -9,7 +9,8 @@
     "start": "node --env-file-if-exists=../.env index.js",
     "seed": "node --env-file-if-exists=../.env seed.js",
     "import:datingpro": "node --env-file-if-exists=../.env importDatingPro.js",
-    "copy:sqlite-to-postgres": "node --env-file-if-exists=../.env copySqliteToPostgres.js"
+    "copy:sqlite-to-postgres": "node --env-file-if-exists=../.env copySqliteToPostgres.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@coinbase/x402": "^2.1.0",
