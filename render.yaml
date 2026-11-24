@@ -49,6 +49,12 @@ services:
         sync: false
       - key: STRIPE_WEBHOOK_SECRET
         sync: false
+      # Google Play Billing (buy sparks in the Android app) — optional.
+      # See server/playBilling.js.
+      - key: GOOGLE_PLAY_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: GOOGLE_PLAY_PACKAGE_NAME
+        sync: false
       # Cupid AI — optional, ships with a heuristic fallback.
       - key: CUPID_LLM_URL
         sync: false

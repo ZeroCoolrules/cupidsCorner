@@ -105,6 +105,15 @@ see or match.
   `primaryColor`, `accentColor`, `supportEmail`, `active`).
 - A brand's domain (and `www.` of it) is allowed for CORS automatically.
 
+
+## Buying sparks in the Android app
+
+Inside the Qpids Place Android app, sparks are sold through Google Play Billing instead of Stripe. The app shows Google's purchase sheet and sends the resulting purchase token to `POST /api/billing/play/redeem`. The server asks Google whether the purchase is real and paid, adds the sparks once, and marks the purchase as used so the pack can be bought again. See `server/playBilling.js`.
+
+- Set `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` (the service account key, raw or base64) and, if the app id differs, `GOOGLE_PLAY_PACKAGE_NAME`. Leave them unset and the app says buying isn't open yet.
+- Create one one-time product per pack in Play Console with the IDs `sparks_small`, `sparks_medium`, `sparks_large`, priced to match the packs in `server/billing.js`.
+- `npm --workspace server test` runs the checks against a stand-in for Google.
+
 ## Coach sessions (paid voice calls with Cupid)
 
 Cupid also takes phone calls. A member pays sparks for one session, and only then sees the coach line and a six-digit one-time code. The voice agent asks the caller for the code and checks it with this API before it starts, so the number is no use to anyone who hasn't paid.

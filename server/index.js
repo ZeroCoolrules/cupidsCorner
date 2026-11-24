@@ -63,6 +63,7 @@ import {
   DEFAULT_BRAND_SLUG,
 } from "./brands.js";
 import { initCoach, registerCoachRoutes } from "./coach.js";
+import { initPlayBilling, registerPlayBillingRoutes } from "./playBilling.js";
 import { initSocial, registerSocialRoutes, feedPhotosOf } from "./social.js";
 import { initExtras, registerExtrasRoutes, albumPhotosOf, trackAvatar, applyReferral } from "./extras.js";
 import { initMeetups, registerMeetupRoutes } from "./meetups.js";
@@ -147,6 +148,7 @@ const reportLimiter = rateLimit({
 await initDb();
 await initBrands();
 await initCoach();
+await initPlayBilling();
 await initSocial();
 await initExtras();
 await initMeetups();
@@ -1942,6 +1944,9 @@ app.post("/api/billing/checkout", auth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Buying sparks inside the Android app with Google Play (see playBilling.js)
+registerPlayBillingRoutes(app, { auth, q, rateLimit });
 
 // ---------------------------------------------------------------------------
 // paid voice sessions with Cupid, the AI coach (see coach.js)
