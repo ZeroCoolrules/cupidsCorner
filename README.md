@@ -49,6 +49,30 @@ The 📡 Live tab, built from the Social Streaming Rooms idea and DatingPro's li
 
 API: `GET/POST /api/feed`, `DELETE /api/feed/:id`, `POST/DELETE /api/feed/:id/like`, `GET/POST /api/feed/:id/comments`, `DELETE /api/feed/comments/:id`, `POST /api/feed/:id/report`; public `GET /api/blog` and `GET /api/blog/:slug`; admin `GET/POST /api/admin/blog`, `GET/PUT/DELETE /api/admin/blog/:id`, `POST/DELETE /api/admin/blog/:id/cover`. All of it is also under `/api/v1`, so brand sites can show the same feed and blog. Code is in `server/social.js`; tables `feed_posts`, `feed_likes`, `feed_comments`, `blog_posts` are created at startup on SQLite and Postgres alike. Feed photos and blog covers are stored in `UPLOADS_DIR` with profile photos.
 
+## Profile extras, winks, invites and meetups
+
+**Profile questions.** Extra questions on a profile ("Height", "Wants children", "Pets"...). The list lives in the database with a starter set, and admins can add, rename, reorder and hide questions without a deploy. Sensitive topics are left out of the starter set on purpose.
+
+**Photo albums and review queue.** Each member can add up to 12 album photos. An album photo stays hidden until an admin approves it. Profile pictures go live right away, as before, and join the same queue so an admin can still remove one. A removed photo's file is deleted and the member sees the reason.
+
+**Winks.** A one-tap hello. Free members get 5 a day and Premium members 50, with one wink per person per day. Blocks and bans apply.
+
+**Invite links.** Every member has a personal code. Someone who joins with it (`referralCode` on sign-up) gets 50 welcome sparks, and the inviter gets 100 sparks once that new member's first photo is approved. Tying the reward to an admin's check keeps throwaway sign-ups from farming sparks.
+
+**Meetup board.** A member posts when they're free and what they'd like to do, and anyone can ask to join. The host decides who comes. The board shows only a general area; the exact place is a separate field that only the host and accepted guests can see. Blocks and bans apply both ways, and reporting a meetup files a normal report against the host in the admin Reports queue. Accepting someone opens a chat between host and guest.
+
+Optional settings: `PHOTO_ALBUM_MAX` (12), `WINKS_PER_DAY` (5), `WINKS_PER_DAY_PREMIUM` (50), `REFERRAL_REWARD_SPARKS` (100), `REFERRAL_WELCOME_SPARKS` (50), `MEETUPS_ACTIVE_MAX` (3), `MEETUP_DAYS_AHEAD` (60).
+
+API: `GET /api/profile-fields`, `PUT /api/me/profile-fields`, `GET/POST /api/admin/profile-fields`, `PUT /api/admin/profile-fields/:key`; `GET/POST /api/me/photos`, `DELETE /api/me/photos/:id`, `GET /api/users/:id/extras`; `GET /api/admin/photos?status=`, `POST /api/admin/photos/:id/decision`; `POST /api/users/:id/wink`, `GET /api/winks`, `GET /api/winks/unseen`; `GET /api/me/referral`, public `GET /api/public/referral/:code`; `GET/POST /api/meetups`, `GET /api/meetups/mine`, `GET/DELETE /api/meetups/:id`, `POST/DELETE /api/meetups/:id/join`, `POST /api/meetups/:id/requests/:requestId`, `POST /api/meetups/:id/report`. All of it is also under `/api/v1`. Code is in `server/extras.js` and `server/meetups.js`; tables `profile_field_defs`, `profile_field_values`, `profile_photos`, `winks`, `referral_codes`, `referrals`, `meetups`, `meetup_requests` are created at startup on SQLite and Postgres alike. The pages for these are in Qpids Place; the Cupid's Corner client does not show them yet.
+
+## Compatibility questionnaire
+
+About forty optional questions in nine topics on what new couples most often trip over: talking and arguing, money, family and children, pace, day-to-day habits, affection, values, plans and trust. For each one a member picks their own answer and says how much it matters that a partner is close to them (doesn't matter, a little, a lot, must match).
+
+Two members' answers give a score once they share at least 8 questions. Closeness on each question is weighted by how much it matters to each person, and the pair's score is the geometric mean of the two sides, so it is only high when the fit works for both. The score moves people up or down in Discover (`WEIGHTS.quizFit` in `server/matching.js`) and is shown on a profile with a breakdown by topic, what the two line up on, and what is worth talking about early. A member's individual answers are never sent to anyone else. Admins get totals per answer, with no names.
+
+API: `GET /api/quiz`, `PUT /api/quiz/answers`, `GET /api/users/:id/compatibility`, admin `GET /api/admin/quiz/insights`. Code and the question list are in `server/questionnaire.js`; table `quiz_answers`.
+
 ## DatingPro bridge
 
 This brings members of a PG Dating Pro site (the `pg_*` tables, e.g. Cupid's Point) into cupidsCorner. They sign in with their **DatingPro email (or nickname) and their existing password**. Dating Pro stores bcrypt hashes, and the import copies them as they are.

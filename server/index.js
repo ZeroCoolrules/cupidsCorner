@@ -64,6 +64,10 @@ import {
 } from "./brands.js";
 import { initCoach, registerCoachRoutes } from "./coach.js";
 import { initSocial, registerSocialRoutes, feedPhotosOf } from "./social.js";
+import { initExtras, registerExtrasRoutes, albumPhotosOf, trackAvatar, applyReferral } from "./extras.js";
+import { initMeetups, registerMeetupRoutes } from "./meetups.js";
+import { initQuestionnaire, registerQuestionnaireRoutes, quizAnswersOf, quizAnswersFor, compareAnswers } from "./questionnaire.js";
+import { initCampaigns, registerCampaignRoutes, applyCampaign } from "./campaigns.js";
 
 // Array helpers for async callbacks (DB calls are async).
 const mapAsync = (arr, fn) => Promise.all(arr.map(fn));
@@ -144,6 +148,10 @@ await initDb();
 await initBrands();
 await initCoach();
 await initSocial();
+await initExtras();
+await initMeetups();
+await initQuestionnaire();
+await initCampaigns();
 
 const app = express();
 // Route handlers are async (the database is); pass their errors to the
@@ -674,10 +682,14 @@ app.post("/api/auth/signup", authLimiter, async (req, res) => {
     interests: JSON.stringify(Array.isArray(interests) ? interests : []),
   });
   await ensureAiConversation(userId);
+  // An invite code is optional and never blocks a sign-up.
+  const welcomeSparks = await applyReferral(userId, req.body?.referralCode, { q });
+  // So is the launch campaign (the state page) they joined through.
+  const campaign = await applyCampaign(userId, req.body?.campaign, { q });
 
   const token = crypto.randomBytes(24).toString("hex");
   await q.insertSession.run(token, userId);
-  res.json({ token, user: await publicUser(userId) });
+  res.json({ token, user: await publicUser(userId), welcomeSparks, campaign });
 });
 
 app.post("/api/auth/login", authLimiter, async (req, res) => {
@@ -759,6 +771,8 @@ app.post("/api/me/photo", auth, upload.single("photo"), async (req, res) => {
     fs.unlink(path.join(uploadsDir, path.basename(cur.photo_url)), () => {});
   }
   await q.setPhoto.run(`/uploads/${req.file.filename}`, req.userId);
+  // Live right away, and added to the admin photo review queue.
+  await trackAvatar(req.userId, `/uploads/${req.file.filename}`);
   res.json({ user: await publicUser(req.userId) });
 });
 
@@ -768,6 +782,7 @@ app.delete("/api/me/photo", auth, async (req, res) => {
     fs.unlink(path.join(uploadsDir, path.basename(cur.photo_url)), () => {});
   }
   await q.setPhoto.run(null, req.userId);
+  await trackAvatar(req.userId, null);
   res.json({ user: await publicUser(req.userId) });
 });
 
@@ -783,7 +798,7 @@ app.delete("/api/me", auth, async (req, res) => {
   for (const v of await q.verificationsFor.all(req.userId)) {
     fs.unlink(path.join(verificationsDir, path.basename(v.selfie_file)), () => {});
   }
-  for (const url of await feedPhotosOf(req.userId)) {
+  for (const url of [...(await feedPhotosOf(req.userId)), ...(await albumPhotosOf(req.userId))]) {
     fs.unlink(path.join(uploadsDir, path.basename(url)), () => {});
   }
   await q.deleteUser.run(req.userId);
@@ -1211,8 +1226,17 @@ app.get("/api/discover", auth, async (req, res) => {
     )
     .all(req.userId, ...params);
 
+  // Questionnaire fit, for candidates who share enough answers with me.
+  const myQuiz = await quizAnswersOf(req.userId);
+  const poolQuiz = Object.keys(myQuiz).length ? await quizAnswersFor(pool.map((c) => c.user_id)) : new Map();
+  const quizFit = (c) => {
+    const theirs = poolQuiz.get(Number(c.user_id));
+    const fit = theirs ? compareAnswers(myQuiz, theirs) : null;
+    return fit?.ready ? fit : null;
+  };
+
   const ranked = pool
-    .map((c) => ({ c, s: scoreCandidate(me, c) }))
+    .map((c) => ({ c, s: scoreCandidate(me, c, Math.random, quizFit(c)) }))
     .filter((x) => x.s)
     .sort((a, b) => b.s.score - a.s.score)
     .slice(0, 25);
@@ -1220,7 +1244,7 @@ app.get("/api/discover", auth, async (req, res) => {
   res.json({
     profiles: await mapAsync(ranked, async ({ c, s }) => ({
       ...(await publicUser(c.user_id)),
-      match: { percent: matchPercent(s.score), reasons: s.reasons },
+      match: { percent: matchPercent(s.score), reasons: s.reasons, quizPercent: s.quizPercent ?? null },
     })),
   });
 });
@@ -1926,6 +1950,33 @@ registerCoachRoutes(app, { auth, q, rateLimit });
 // ---------------------------------------------------------------------------
 
 registerSocialRoutes(app, { auth, adminOnly, isAdmin, q, rateLimit, upload, uploadsDir });
+
+// ---------------------------------------------------------------------------
+// profile fields, photo albums and their review queue, winks, invites (see
+// extras.js) and the open meetup board (see meetups.js)
+// ---------------------------------------------------------------------------
+
+// The chat between two members, created if they don't have one yet.
+async function openDm(aId, bId, systemText) {
+  const existing = await q.dmBetween.get(aId, bId);
+  if (existing) return existing.id;
+  const conversationId = Number((await q.insertConversation.run("dm", "", aId)).lastInsertRowid);
+  await q.insertMember.run(conversationId, aId);
+  await q.insertMember.run(conversationId, bId);
+  await q.insertMessage.run(conversationId, null, "system", systemText, null);
+  await safeStream(async () =>
+    syncChannel({ conversationId, type: "dm", title: "", members: await q.membersOf.all(conversationId), createdById: aId })
+  );
+  await safeStream(() => sendSystemMessage(conversationId, systemText));
+  return conversationId;
+}
+
+registerExtrasRoutes(app, { auth, adminOnly, q, rateLimit, upload, uploadsDir, publicUser });
+registerMeetupRoutes(app, { auth, q, rateLimit, publicUser, openDm });
+registerCampaignRoutes(app, { auth, adminOnly });
+
+// The compatibility questionnaire (see questionnaire.js).
+registerQuestionnaireRoutes(app, { auth, adminOnly, q, rateLimit });
 
 // ---------------------------------------------------------------------------
 // paid API (x402): pay-per-call compatibility scoring
