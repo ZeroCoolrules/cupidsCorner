@@ -12,8 +12,8 @@
 //
 // Settings (environment variables, all optional):
 //   FOUNDING_MEMBER_LIMIT   founding spots per campaign (default 500)
-//   FOUNDING_PREMIUM_DAYS   days of Premium for a founding member (default 30)
-//   FOUNDING_SPARKS         sparks for a founding member (default 200)
+//   FOUNDING_PREMIUM_DAYS   days of Premium for a founding member (default 90)
+//   FOUNDING_SPARKS         sparks for a founding member (default 500)
 
 import { db } from "./db.js";
 
@@ -24,8 +24,8 @@ const intEnv = (name, fallback, min, max) => {
 };
 
 export const FOUNDING_MEMBER_LIMIT = intEnv("FOUNDING_MEMBER_LIMIT", 500, 0, 1_000_000);
-export const FOUNDING_PREMIUM_DAYS = intEnv("FOUNDING_PREMIUM_DAYS", 30, 0, 365);
-export const FOUNDING_SPARKS = intEnv("FOUNDING_SPARKS", 200, 0, 100_000);
+export const FOUNDING_PREMIUM_DAYS = intEnv("FOUNDING_PREMIUM_DAYS", 90, 0, 365);
+export const FOUNDING_SPARKS = intEnv("FOUNDING_SPARKS", 500, 0, 100_000);
 
 const STARTER_CAMPAIGNS = [
   { slug: "missouri", name: "Missouri", cities: ["St. Louis", "Kansas City", "Springfield", "Columbia", "Independence", "Jefferson City", "Cape Girardeau", "Joplin"] },
