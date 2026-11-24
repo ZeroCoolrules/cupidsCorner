@@ -28,6 +28,7 @@ const legalRoutes = [
   <Route key="terms" path="/terms" element={<Legal doc="terms" />} />,
   <Route key="privacy" path="/privacy" element={<Legal doc="privacy" />} />,
   <Route key="guidelines" path="/guidelines" element={<Legal doc="guidelines" />} />,
+  <Route key="safety" path="/safety" element={<Legal doc="safety" />} />,
 ];
 
 // The blog is public: readable signed out, so articles can be shared.

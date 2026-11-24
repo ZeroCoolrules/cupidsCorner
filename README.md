@@ -204,7 +204,7 @@ npm start        # Express serves the API + the built client on :8787
 ## Go live checklist
 
 1. Deploy with the Render blueprint below. It uses the **starter** plan with a 1 GB persistent disk, so accounts and photos survive restarts (Render bills the instance and disk monthly).
-2. Set `ADMIN_USERNAMES` to your own username, and `SUPPORT_EMAIL` to an inbox you read. The email shows in the Terms, Privacy Policy and Community Guidelines.
+2. Set `ADMIN_USERNAMES` to your own username, and `SUPPORT_EMAIL` to an inbox you read. The email shows in the Terms, Privacy Policy and Community Guidelines. Set `LEGAL_NAME`, `LEGAL_ADDRESS` and `GOVERNING_STATE` too, so those pages name the business that runs the site. The pages and the safety notice (sign-up, every profile, `/safety`) say we do not run criminal background checks, which Illinois law requires us to state; change that wording if it stops being true.
 3. Sign up on the live site with that username. Your profile page then shows "Review pending verifications" and "Review reports".
 4. Optional but recommended: Stream keys (chat and video), Stripe keys plus the webhook (sparks purchases), and a Cupid LLM key.
 5. Don't run `npm run seed` in production: the demo members are fake people. The seed script refuses when `NODE_ENV=production`.

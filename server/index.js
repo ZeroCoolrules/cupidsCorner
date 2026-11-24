@@ -606,6 +606,10 @@ app.get("/api/public/config", (req, res) => {
     supportEmail: req.brand.support_email || SUPPORT_EMAIL,
     demoMode: DEMO_MODE,
     minAge: MIN_AGE,
+    // Who runs the service, for the legal pages (all optional).
+    legalName: process.env.LEGAL_NAME || "",
+    legalAddress: process.env.LEGAL_ADDRESS || "",
+    governingState: process.env.GOVERNING_STATE || "",
     brand: publicBrand(req.brand),
   });
 });

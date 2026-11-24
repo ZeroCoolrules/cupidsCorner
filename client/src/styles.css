@@ -1107,6 +1107,10 @@ code {
 .legal-body h3 { margin: 18px 0 4px; font-size: 16px; }
 .legal-body p, .legal-body li { line-height: 1.55; }
 .legal-body ul { padding-left: 20px; }
+.safety-notice { margin: 16px 0; padding: 16px; }
+.safety-notice ul { padding-left: 20px; margin: 10px 0 0; }
+.safety-notice li { line-height: 1.5; margin-bottom: 6px; }
+.safety-notice p.sm { margin: 8px 0 0; }
 .legal-links { text-align: center; margin: 14px 0 24px; }
 .legal-links a, .consent a { color: var(--accent-ink); }
 .consent { display: flex; flex-direction: row; gap: 10px; align-items: flex-start; font-size: 13px; line-height: 1.45; }

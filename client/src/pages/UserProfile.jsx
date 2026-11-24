@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../api.js";
 import GiftTray from "../components/GiftTray.jsx";
+import SafetyNotice from "../components/SafetyNotice.jsx";
 import Avatar, { isOnline } from "../components/Avatar.jsx";
 
 function Stars({ value, onRate }) {
@@ -238,6 +239,8 @@ export default function UserProfile() {
           </div>
         </div>
       )}
+
+      <SafetyNotice />
 
       {showReport && (
         <div className="modal-backdrop" onClick={() => setShowReport(false)}>
