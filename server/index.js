@@ -66,6 +66,7 @@ import { initCoach, registerCoachRoutes } from "./coach.js";
 import { initSocial, registerSocialRoutes, feedPhotosOf } from "./social.js";
 import { initExtras, registerExtrasRoutes, albumPhotosOf, trackAvatar, applyReferral } from "./extras.js";
 import { initMeetups, registerMeetupRoutes } from "./meetups.js";
+import { initQuestionnaire, registerQuestionnaireRoutes, quizAnswersOf, quizAnswersFor, compareAnswers } from "./questionnaire.js";
 
 // Array helpers for async callbacks (DB calls are async).
 const mapAsync = (arr, fn) => Promise.all(arr.map(fn));
@@ -148,6 +149,7 @@ await initCoach();
 await initSocial();
 await initExtras();
 await initMeetups();
+await initQuestionnaire();
 
 const app = express();
 // Route handlers are async (the database is); pass their errors to the
@@ -1220,8 +1222,17 @@ app.get("/api/discover", auth, async (req, res) => {
     )
     .all(req.userId, ...params);
 
+  // Questionnaire fit, for candidates who share enough answers with me.
+  const myQuiz = await quizAnswersOf(req.userId);
+  const poolQuiz = Object.keys(myQuiz).length ? await quizAnswersFor(pool.map((c) => c.user_id)) : new Map();
+  const quizFit = (c) => {
+    const theirs = poolQuiz.get(Number(c.user_id));
+    const fit = theirs ? compareAnswers(myQuiz, theirs) : null;
+    return fit?.ready ? fit : null;
+  };
+
   const ranked = pool
-    .map((c) => ({ c, s: scoreCandidate(me, c) }))
+    .map((c) => ({ c, s: scoreCandidate(me, c, Math.random, quizFit(c)) }))
     .filter((x) => x.s)
     .sort((a, b) => b.s.score - a.s.score)
     .slice(0, 25);
@@ -1229,7 +1240,7 @@ app.get("/api/discover", auth, async (req, res) => {
   res.json({
     profiles: await mapAsync(ranked, async ({ c, s }) => ({
       ...(await publicUser(c.user_id)),
-      match: { percent: matchPercent(s.score), reasons: s.reasons },
+      match: { percent: matchPercent(s.score), reasons: s.reasons, quizPercent: s.quizPercent ?? null },
     })),
   });
 });
@@ -1958,6 +1969,9 @@ async function openDm(aId, bId, systemText) {
 
 registerExtrasRoutes(app, { auth, adminOnly, q, rateLimit, upload, uploadsDir, publicUser });
 registerMeetupRoutes(app, { auth, q, rateLimit, publicUser, openDm });
+
+// The compatibility questionnaire (see questionnaire.js).
+registerQuestionnaireRoutes(app, { auth, adminOnly, q, rateLimit });
 
 // ---------------------------------------------------------------------------
 // paid API (x402): pay-per-call compatibility scoring
