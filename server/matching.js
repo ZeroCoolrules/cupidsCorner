@@ -22,6 +22,8 @@ export const WEIGHTS = {
   ageGapFreeYears: 5, // no penalty inside this gap
   ageGapPerYear: -2,
   ageGapMax: -20,
+  // Questionnaire fit: a 50% fit is neutral, 100% adds this much, 0% takes it away.
+  quizFit: 20,
   jitter: 4, // small randomness so the deck isn't identical every visit
 };
 
@@ -74,7 +76,9 @@ const parseList = (json) => {
 
 // me, c: profile rows (profiles table) plus c.created_at, c.liked_me,
 // c.is_premium, c.report_count. Returns null when the candidate is filtered.
-export function scoreCandidate(me, c, rand = Math.random) {
+// quiz: the result of compareAnswers() for this pair when both have answered
+// enough of the questionnaire, otherwise null.
+export function scoreCandidate(me, c, rand = Math.random, quiz = null) {
   if (!c.age || c.age < 18) return null;
   if ((c.report_count || 0) >= REPORTS_TO_HIDE) return null;
   if (!wants(me.orientation, me.gender, c.gender) || !wants(c.orientation, c.gender, me.gender)) return null;
@@ -120,8 +124,15 @@ export function scoreCandidate(me, c, rand = Math.random) {
     if (gap > 0) score += Math.max(WEIGHTS.ageGapMax, gap * WEIGHTS.ageGapPerYear);
   }
 
+  if (quiz?.ready) {
+    score += ((quiz.percent - 50) / 50) * WEIGHTS.quizFit;
+    const best = [...quiz.areas].sort((a, b) => b.percent - a.percent)[0];
+    // Leads the list: it is the most considered reason we have.
+    if (quiz.percent >= 70 && best) reasons.unshift(`You line up on ${best.title.toLowerCase()}`);
+  }
+
   score += rand() * WEIGHTS.jitter;
-  return { score, reasons: reasons.slice(0, 3) };
+  return { score, reasons: reasons.slice(0, 3), quizPercent: quiz?.ready ? quiz.percent : undefined };
 }
 
 // Turns a raw rank score into the 0-100 "match %" shown on the card.

@@ -65,6 +65,14 @@ Optional settings: `PHOTO_ALBUM_MAX` (12), `WINKS_PER_DAY` (5), `WINKS_PER_DAY_P
 
 API: `GET /api/profile-fields`, `PUT /api/me/profile-fields`, `GET/POST /api/admin/profile-fields`, `PUT /api/admin/profile-fields/:key`; `GET/POST /api/me/photos`, `DELETE /api/me/photos/:id`, `GET /api/users/:id/extras`; `GET /api/admin/photos?status=`, `POST /api/admin/photos/:id/decision`; `POST /api/users/:id/wink`, `GET /api/winks`, `GET /api/winks/unseen`; `GET /api/me/referral`, public `GET /api/public/referral/:code`; `GET/POST /api/meetups`, `GET /api/meetups/mine`, `GET/DELETE /api/meetups/:id`, `POST/DELETE /api/meetups/:id/join`, `POST /api/meetups/:id/requests/:requestId`, `POST /api/meetups/:id/report`. All of it is also under `/api/v1`. Code is in `server/extras.js` and `server/meetups.js`; tables `profile_field_defs`, `profile_field_values`, `profile_photos`, `winks`, `referral_codes`, `referrals`, `meetups`, `meetup_requests` are created at startup on SQLite and Postgres alike. The pages for these are in Qpids Place; the Cupid's Corner client does not show them yet.
 
+## Compatibility questionnaire
+
+About forty optional questions in nine topics on what new couples most often trip over: talking and arguing, money, family and children, pace, day-to-day habits, affection, values, plans and trust. For each one a member picks their own answer and says how much it matters that a partner is close to them (doesn't matter, a little, a lot, must match).
+
+Two members' answers give a score once they share at least 8 questions. Closeness on each question is weighted by how much it matters to each person, and the pair's score is the geometric mean of the two sides, so it is only high when the fit works for both. The score moves people up or down in Discover (`WEIGHTS.quizFit` in `server/matching.js`) and is shown on a profile with a breakdown by topic, what the two line up on, and what is worth talking about early. A member's individual answers are never sent to anyone else. Admins get totals per answer, with no names.
+
+API: `GET /api/quiz`, `PUT /api/quiz/answers`, `GET /api/users/:id/compatibility`, admin `GET /api/admin/quiz/insights`. Code and the question list are in `server/questionnaire.js`; table `quiz_answers`.
+
 ## DatingPro bridge
 
 This brings members of a PG Dating Pro site (the `pg_*` tables, e.g. Cupid's Point) into cupidsCorner. They sign in with their **DatingPro email (or nickname) and their existing password**. Dating Pro stores bcrypt hashes, and the import copies them as they are.
